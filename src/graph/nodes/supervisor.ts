@@ -1,36 +1,34 @@
-import { supervisorPrompt } from "../../prompts/supervisor.prompt";
-import { llm } from "../../config/llm";
-import type { GraphStateType } from "../state";
+import { BaseMessage, getBufferString } from "@langchain/core/messages";
+import { GraphStateType } from "../state.js";
+import { llm } from "../../llm/index.js";
+import { supervisorPrompt, AGENTS } from "../../prompts/index.js";
+import { createLogger } from "../../lib/logger.js";
 
-const TENANT_AGENTS = ["search_agent", "booking_agent", "payment_agent", "complaint_agent"];
-const OWNER_AGENTS = ["property_agent", "booking_mgmt_agent", "report_agent"];
+const log = createLogger("supervisor");
 
-const chain = supervisorPrompt.pipe(llm);
+// formatMessages dihapus karena sudah menggunakan getBufferString bawaan LangChain
 
-export async function supervisorNode(
-  state: GraphStateType
-): Promise<Partial<GraphStateType>> {
-  const { role, summary, messages, forceSupervisorReroute, rerouteReason } = state;
+export const supervisorNode = async (
+  state: GraphStateType,
+): Promise<Partial<GraphStateType>> => {
+  const { messages, summary, pendingAction } = state;
 
-  const availableAgents = role === "tenant" ? TENANT_AGENTS : OWNER_AGENTS;
-  const lastHuman = [...messages].reverse().find((m) => m.getType() === "human");
+  if (pendingAction) {
+    log.info({ pendingAction: pendingAction.toolName }, "Routing to confirmation resolver");
+    return { next: "resolve_confirmation" };
+  }
 
-  const response = await chain.invoke({
-    role: role === "tenant" ? "PENYEWA" : "PEMILIK",
-    agents: availableAgents.join(", "),
-    summary: summary ? `Konteks percakapan: ${summary}` : "",
-    rerouteWarning: forceSupervisorReroute
-      ? `PERHATIAN - Reroute karena: ${rerouteReason}`
-      : "",
-    input: String(lastHuman?.content ?? ""),
+  const chain = supervisorPrompt.pipe(llm);
+  const result = await chain.invoke({
+    agents: AGENTS.join(", "),
+    summary: summary ? `Konteks sebelumnya:\n${summary}` : "",
+    conversation: getBufferString(messages),
   });
 
-  const next = String(response.content).trim().toLowerCase();
-  const validNext = availableAgents.includes(next) ? next : availableAgents[0];
+  const response = String(result.content).trim().toLowerCase();
+  const next = AGENTS.includes(response as (typeof AGENTS)[number]) ? response : "general";
 
-  return {
-    next: validNext,
-    forceSupervisorReroute: false,
-    rerouteReason: "",
-  };
-}
+  log.info({ selectedAgent: next }, "Supervisor routed");
+
+  return { next };
+};

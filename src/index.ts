@@ -1,31 +1,44 @@
 import "dotenv/config";
-import { createTenantBot } from "./bots/tenant.bot";
-import { createOwnerBot } from "./bots/owner.bot";
-import { logger } from "./logging/logger";
+import { createBot } from "./bot/telegram.js";
+import { initGraph } from "./graph/index.js";
+import { initLongTermMemoryTable } from "./memory/longterm.js";
+import { logger } from "./lib/logger.js";
 
-async function main() {
-  const tenantBot = createTenantBot();
-  const ownerBot = createOwnerBot();
+const main = async () => {
+  logger.info("Starting Kosan Bot...");
 
-  logger.info({ event: "bot_starting" }, "Starting bots");
+  // Initialize database tables
+  await initLongTermMemoryTable();
 
-  await Promise.all([tenantBot.launch(), ownerBot.launch()]);
+  // Initialize graph
+  await initGraph();
 
-  logger.info({ event: "bot_started" }, "Both bots are running");
+  // Create and launch bot
+  const bot = createBot();
 
-  process.once("SIGINT", () => {
-    logger.warn({ event: "bot_shutdown", signal: "SIGINT" }, "Stopping bots");
-    tenantBot.stop("SIGINT");
-    ownerBot.stop("SIGINT");
-  });
+  // Graceful shutdown
+  const shutdown = async (signal: string) => {
+    logger.info({ signal }, "Shutting down...");
+    bot.stop(signal);
+    process.exit(0);
+  };
 
-  process.once("SIGTERM", () => {
-    logger.warn({ event: "bot_shutdown", signal: "SIGTERM" }, "Stopping bots");
-    tenantBot.stop("SIGTERM");
-    ownerBot.stop("SIGTERM");
-  });
-}
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+  // Launch
+  await bot.launch();
+  logger.info("Bot is running!");
+};
 
 main().catch((error) => {
-  logger.error({ event: "bot_bootstrap_failed", error }, "Failed to start bots");
+  logger.error(
+    {
+      error,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    },
+    "Failed to start bot",
+  );
+  process.exit(1);
 });
