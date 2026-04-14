@@ -5,6 +5,15 @@ import { createLogger } from "../../lib/logger.js";
 import { callSecureMcpTool } from "../../mcp/client.js";
 
 const log = createLogger("confirm");
+ 
+const escapeHtml = (text: string): string => {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+};
 
 const CONFIRM_KEYWORDS = [
   "ya", "yes", "oke", "ok", "iya", "yup", "setuju", "lanjut", "konfirmasi",
@@ -39,9 +48,18 @@ const getActionDescription = (toolName: string, args: Record<string, unknown>): 
   switch (toolName) {
     case "update_profile": {
       const updates: string[] = [];
-      if (args.name) updates.push(`nama menjadi "${args.name}"`);
-      if (args.phone) updates.push(`nomor HP menjadi "${args.phone}"`);
+      if (args.name) updates.push(`nama menjadi "<b>${escapeHtml(String(args.name))}</b>"`);
+      if (args.phone) updates.push(`nomor HP menjadi "<b>${escapeHtml(String(args.phone))}</b>"`);
       return `mengubah ${updates.join(" dan ")}`;
+    }
+    case "create_booking": {
+      return `mem-booking kamar <b>${escapeHtml(String(args.roomId))}</b> mulai tanggal <b>${escapeHtml(String(args.startDate))}</b> selama <b>${args.duration} bulan</b>`;
+    }
+    case "cancel_booking": {
+      return `membatalkan booking <b>${escapeHtml(String(args.bookingId))}</b>`;
+    }
+    case "upload_payment_proof": {
+      return `mengunggah bukti pembayaran untuk tagihan <b>${escapeHtml(String(args.paymentId))}</b>`;
     }
     default:
       return `menjalankan ${toolName}`;
@@ -54,6 +72,22 @@ const getLastWriteToolCall = (state: GraphStateType) => {
     return null;
   }
   return lastMessage.tool_calls.find((tc) => isWriteTool(tc.name)) ?? null;
+};
+
+const getHumanTextContent = (message: HumanMessage): string => {
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+
+  if (!Array.isArray(message.content)) {
+    return "";
+  }
+
+  return message.content
+    .filter((part): part is { type: string; text?: string } => typeof part === "object" && part !== null)
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join(" ");
 };
 
 export const prepareConfirmationNode = async (
@@ -76,6 +110,10 @@ export const prepareConfirmationNode = async (
       writeToolCall.name,
       writeToolCall.args as Record<string, unknown>,
     ),
+    paymentProofImageUrl:
+      writeToolCall.name === "upload_payment_proof"
+        ? state.paymentProofImageUrl || undefined
+        : undefined,
   };
 
   log.info({ pendingAction }, "Prepared confirmation for write action");
@@ -105,10 +143,10 @@ export const resolveConfirmationNode = async (
   }
 
   const lastMessage = messages[messages.length - 1];
-  const userText = lastMessage instanceof HumanMessage ? String(lastMessage.content) : "";
+  const userText = lastMessage instanceof HumanMessage ? getHumanTextContent(lastMessage) : "";
 
   if (isCancellation(userText)) {
-    log.info({ pendingAction: pendingAction.toolName }, "User cancelled action");
+    log.info({ pendingAction: pendingAction.toolName, userText }, "User cancelled action");
     return {
       messages: [new AIMessage("Okeee, batal dulu yaa 👌")],
       next: "end",
@@ -117,9 +155,11 @@ export const resolveConfirmationNode = async (
   }
 
   if (isConfirmation(userText)) {
-    log.info({ pendingAction: pendingAction.toolName }, "User confirmed action");
+    log.info({ pendingAction: pendingAction.toolName, userText }, "User confirmed action");
     return { next: "execute_pending" };
   }
+
+  log.info({ pendingAction: pendingAction.toolName, userText }, "User confirmation input not recognized");
 
   return {
     messages: [
@@ -135,7 +175,7 @@ export const resolveConfirmationNode = async (
 export const executePendingActionNode = async (
   state: GraphStateType,
 ): Promise<Partial<GraphStateType>> => {
-  const { pendingAction, userId } = state;
+  const { pendingAction, userId, paymentProofImageUrl, activePaymentId } = state;
 
   if (!pendingAction) {
     log.warn("No pending action to execute");
@@ -159,32 +199,54 @@ export const executePendingActionNode = async (
       };
     }
 
-    const result = await callSecureMcpTool(userId, pendingAction.toolName, pendingAction.toolArgs);
+    const persistedPaymentProofImageUrl =
+      pendingAction.paymentProofImageUrl || paymentProofImageUrl;
+    const toolArgs =
+      pendingAction.toolName === "upload_payment_proof" &&
+      persistedPaymentProofImageUrl
+        ? {
+            ...pendingAction.toolArgs,
+            imageUrl: persistedPaymentProofImageUrl,
+          }
+        : pendingAction.toolArgs;
+
+    const result = await callSecureMcpTool(userId, pendingAction.toolName, toolArgs);
 
     const resultText = typeof result === "string" ? result : JSON.stringify(result);
     log.info({ toolName: pendingAction.toolName, result: resultText }, "Action executed successfully");
 
     let responseText = "Sip, berhasil yaa ✨";
     
-    // Gunakan result langsung karena sekarang sudah berupa objek dari callSecureMcpTool
     if (result && typeof result === 'object' && 'content' in result && Array.isArray(result.content) && result.content.length > 0) {
-      responseText = result.content[0].text;
-    } else {
+      const rawText = result.content[0].text;
       try {
-        const parsed = typeof result === 'string' ? JSON.parse(result) : result;
-        if (parsed.message) {
-          responseText = parsed.message;
-        } else if (parsed.profile) {
+        const parsed = JSON.parse(rawText);
+        
+        if (pendingAction.toolName === "update_profile" && parsed.profile) {
           responseText = `Sip, profil kamu udah ke-update ✨\nNama: ${parsed.profile.name}\nHP: ${parsed.profile.phone || "-"}`;
+        } else if (pendingAction.toolName === "create_booking") {
+          const firstPayment = parsed.payments?.[0];
+          const paymentInfo = firstPayment 
+            ? `\n💰 Tagihan pertama: <b>Rp ${firstPayment.amount.toLocaleString("id-ID")}</b> (cek di menu pembayaran ya!)`
+            : "";
+          responseText = `<b>Hore! Booking berhasil dibuat ✨</b>\n\nKamar <b>${parsed.room?.name}</b> di <b>${parsed.room?.kosan?.name}</b> sudah dipesan untuk kamu.${paymentInfo}\n\nAda lagi yang bisa aku bantu?`;
+        } else if (parsed.message) {
+          responseText = parsed.message;
+        } else {
+          responseText = "Sip, berhasil yaa ✨";
         }
       } catch {
-        responseText = "Oke, aksinya udah berhasil dijalanin ✨";
+        responseText = rawText || "Sip, berhasil yaa ✨";
       }
+    } else {
+      responseText = "Oke, aksinya udah berhasil dijalanin ✨";
     }
 
     return {
       messages: [new AIMessage(responseText)],
       pendingAction: null,
+      activePaymentId:
+        pendingAction.toolName === "upload_payment_proof" ? "" : activePaymentId,
     };
   } catch (error) {
     log.error({ error, pendingAction }, "Failed to execute action");

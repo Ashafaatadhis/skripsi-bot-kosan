@@ -1,6 +1,7 @@
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import { createLogger } from "../lib/logger.js";
-import { JsonRpcResponse, RegisterResponse } from "./types.js";
+import { RegisterResponse } from "./types.js";
+import { createBotHeaders } from "./auth.js";
 
 const log = createLogger("mcp-client");
 
@@ -10,6 +11,11 @@ const API_URL = process.env.API_URL || "http://localhost:3000";
 const userCache = new Map<string, RegisterResponse>();
 let mcpClient: MultiServerMCPClient | null = null;
 
+const sleep = (ms: number) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
 export const getMcpClient = async () => {
   if (!mcpClient) {
     mcpClient = new MultiServerMCPClient({
@@ -18,15 +24,44 @@ export const getMcpClient = async () => {
         url: MCP_URL,
       },
     });
-    await mcpClient.initializeConnections();
-    log.info("MCP client initialized");
+    log.info({ mcpUrl: MCP_URL }, "MCP client created");
   }
   return mcpClient;
 };
 
 export const getMcpTools = async () => {
   const client = await getMcpClient();
-  return client.getTools();
+  const maxAttempts = 3;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const tools = await client.getTools(["kosan"], {
+        headers: createBotHeaders(),
+      });
+      log.info(
+        { toolCount: tools.length, attempt },
+        "MCP tools loaded with bot auth",
+      );
+      return tools;
+    } catch (error: any) {
+      log.warn(
+        {
+          attempt,
+          maxAttempts,
+          error: error?.message ?? String(error),
+        },
+        "Failed to load MCP tools",
+      );
+
+      if (attempt === maxAttempts) {
+        throw error;
+      }
+
+      await sleep(750 * attempt);
+    }
+  }
+
+  throw new Error("Failed to load MCP tools");
 };
 
 
@@ -42,7 +77,10 @@ export const registerUser = async (
 
   const res = await fetch(`${API_URL}/users/register`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...createBotHeaders(),
+    },
     body: JSON.stringify({
       telegramId,
       role: "tenant",
@@ -66,26 +104,36 @@ export const registerUser = async (
 export const callSecureMcpTool = async (
   userId: string,
   toolName: string,
-  args: any,
+  args: Record<string, unknown>,
 ) => {
   const client = await getMcpClient();
-  const tools = await client.getTools();
-  const tool = tools.find((t) => t.name === toolName);
+  const mcpClient = await client.getClient("kosan", {
+    headers: createBotHeaders(userId),
+  });
 
-  if (!tool) {
-    log.error({ toolName }, "Tool not found in MCP client tools list");
-    throw new Error(`Tool ${toolName} not found`);
+  if (!mcpClient) {
+    log.error({ toolName }, "MCP client connection unavailable");
+    throw new Error("MCP client connection unavailable");
   }
+
+  const secureArgs = { ...args };
 
   log.info({ userId, toolName }, "Calling secure MCP tool via LangChain adapter");
 
-  // Suntikkan userId ke dalam argumen sebelum eksekusi (Way A)
-  const secureArgs = { ...args, userId };
-
-  // Panggil lewat jalur resmi LangChain
-  const result = await tool.invoke(secureArgs);
-  
-  log.info({ toolName, hasResult: !!result }, "MCP invocation returned");
-
-  return result;
+  try {
+    const result = await mcpClient.callTool({
+      name: toolName,
+      arguments: secureArgs,
+    });
+    log.info({ toolName, hasResult: !!result }, "MCP invocation returned");
+    return result;
+  } catch (error: any) {
+    log.error({ 
+      toolName, 
+      args: secureArgs,
+      error: error.message,
+      stack: error.stack 
+    }, "MCP tool invocation failed");
+    throw error;
+  }
 };

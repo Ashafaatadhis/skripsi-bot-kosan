@@ -3,6 +3,7 @@ import { llm } from "../../llm/index.js";
 import { profilePrompt } from "../../prompts/index.js";
 import { getTimeContext } from "../../lib/time.js";
 import { createLogger } from "../../lib/logger.js";
+import { toTextOnlyMessages } from "../../lib/formatter.js";
 import { getProfileTools } from "../tools.js";
 
 const log = createLogger("profile-agent");
@@ -12,6 +13,7 @@ export const profileNode = async (
 ): Promise<Partial<GraphStateType>> => {
   const { messages, summary, userId } = state;
   const time = getTimeContext();
+  const textMessages = toTextOnlyMessages(messages);
 
   const tools = await getProfileTools();
 
@@ -26,7 +28,7 @@ export const profileNode = async (
       ...time,
       userId,
       summary: summary ? `Konteks percakapan:\n${summary}` : "",
-      messages,
+      messages: textMessages,
     });
     const response = await llm.invoke(prompt);
     return { messages: [response] };

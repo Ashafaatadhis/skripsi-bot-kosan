@@ -2,6 +2,7 @@ import { GraphStateType } from "../state.js";
 import { llm } from "../../llm/index.js";
 import { roomsPrompt } from "../../prompts/index.js";
 import { createLogger } from "../../lib/logger.js";
+import { toTextOnlyMessages } from "../../lib/formatter.js";
 import { getRoomsTools } from "../tools.js";
 import { searchLongTermMemory } from "../../memory/longterm.js";
 
@@ -15,6 +16,7 @@ export const roomsNode = async (
   state: GraphStateType,
 ): Promise<Partial<GraphStateType>> => {
   const { messages, summary, userId } = state;
+  const textMessages = toTextOnlyMessages(messages);
 
   log.info({ userId }, "Rooms agent thinking...");
 
@@ -28,7 +30,7 @@ export const roomsNode = async (
 
   // 3. Jalankan LLM
   const response = await chain.invoke({
-    messages,
+    messages: textMessages,
     summary: summary ? `Konteks ringkasan:\n${summary}` : "",
     currentDate: new Date().toLocaleDateString("id-ID"),
     currentTime: new Date().toLocaleTimeString("id-ID"),

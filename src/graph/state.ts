@@ -2,11 +2,30 @@ import { Annotation } from "@langchain/langgraph";
 import { BaseMessage } from "@langchain/core/messages";
 import { FactCategory } from "../config/memory.js";
 
+export interface VisionResult {
+  kind: "payment_proof" | "non_payment" | "unknown";
+  confidence: number;
+  summary: string;
+  amount?: number;
+  bank?: string;
+  transferDate?: string;
+  recipient?: string;
+}
+
+export interface PendingPaymentSnapshot {
+  paymentId: string;
+  amount?: number;
+  dueDate?: string;
+  status?: string;
+  note?: string;
+}
+
 // Pending action for confirmation
 export interface PendingAction {
   toolName: string;
   toolArgs: Record<string, unknown>;
   description: string; // Human-readable description for confirmation
+  paymentProofImageUrl?: string;
 }
 
 // Pending memory candidate structure
@@ -59,6 +78,36 @@ export const GraphState = Annotation.Root({
   next: Annotation<string>({
     reducer: (_, update) => update,
     default: () => "",
+  }),
+
+  // Vision analysis derived from the current turn's image input
+  visionAnalysis: Annotation<string>({
+    reducer: (_, update) => update,
+    default: () => "",
+  }),
+
+  // Structured vision result for the current turn
+  visionResult: Annotation<VisionResult | null>({
+    reducer: (_, update) => update,
+    default: () => null,
+  }),
+
+  // Temporary payment proof image URL captured from the current turn
+  paymentProofImageUrl: Annotation<string>({
+    reducer: (_, update) => update,
+    default: () => "",
+  }),
+
+  // Last payment ID explicitly selected by the user or inferred from a single pending bill
+  activePaymentId: Annotation<string>({
+    reducer: (_, update) => update,
+    default: () => "",
+  }),
+
+  // Snapshot of pending payments from the latest get_pending_payments result
+  pendingPaymentsSnapshot: Annotation<PendingPaymentSnapshot[]>({
+    reducer: (_, update) => update,
+    default: () => [],
   }),
 
   // Images found during tool execution (reset each turn)

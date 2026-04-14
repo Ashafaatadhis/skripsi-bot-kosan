@@ -1,6 +1,6 @@
 import { END, START, StateGraph, MemorySaver } from "@langchain/langgraph"; 
 import { HumanMessage, AIMessage, BaseMessage } from "@langchain/core/messages";
-import { GraphState, GraphStateType } from "./state.js";
+import { GraphState, GraphStateType, PendingPaymentSnapshot } from "./state.js";
 import { memoryNode } from "./nodes/memory.js";
 import { supervisorNode } from "./nodes/supervisor.js";
 import { generalNode } from "./nodes/general.js";
@@ -11,13 +11,133 @@ import {
   resolveConfirmationNode,
   executePendingActionNode,
 } from "./nodes/confirm.js";
+import { paymentsNode } from "./nodes/payments.js";
 import { mediaExtractorNode } from "./nodes/media.js";
+import { visionProcessorNode } from "./nodes/vision.js";
 import { getAllTools, hasAnyToolCall, hasWriteToolCall } from "./tools.js";
 import { createLogger } from "../lib/logger.js";
 import { ToolMessage } from "@langchain/core/messages";
 import { callSecureMcpTool } from "../mcp/client.js";
 
 const log = createLogger("graph");
+
+type McpTextContent = {
+  type?: string;
+  text?: string;
+};
+
+type McpToolResult = {
+  content?: McpTextContent[];
+};
+
+type PendingPaymentPayload = {
+  humanId?: string;
+  amount?: number;
+  dueDate?: string;
+  status?: string;
+  note?: string;
+};
+
+type PaymentToolState = {
+  activePaymentId: string;
+  pendingPaymentsSnapshot: PendingPaymentSnapshot[];
+};
+
+const parseJsonIfPossible = (value: string): unknown => {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+};
+
+const normalizeMcpToolResult = (result: unknown): string => {
+  if (typeof result === "string") {
+    const normalized = parseJsonIfPossible(result);
+    return typeof normalized === "string"
+      ? normalized
+      : JSON.stringify(normalized);
+  }
+
+  if (result === undefined) {
+    return "null";
+  }
+
+  if (result === null) {
+    return "null";
+  }
+
+  if (typeof result !== "object") {
+    return String(result);
+  }
+
+  const maybeMcpResult = result as McpToolResult;
+  const textPayload = maybeMcpResult.content?.find(
+    (item) => item?.type === "text" && typeof item.text === "string",
+  )?.text;
+
+  if (!textPayload) {
+    return JSON.stringify(result);
+  }
+
+  const normalized = parseJsonIfPossible(textPayload);
+  return typeof normalized === "string"
+    ? normalized
+    : JSON.stringify(normalized);
+};
+
+const parsePendingPaymentsSnapshot = (
+  normalizedResult: string,
+): PendingPaymentSnapshot[] => {
+  try {
+    const parsed = JSON.parse(normalizedResult) as {
+      payments?: PendingPaymentPayload[];
+    };
+
+    return (parsed.payments ?? [])
+      .filter((payment) => typeof payment.humanId === "string")
+      .map(
+        (payment): PendingPaymentSnapshot => ({
+          paymentId: payment.humanId as string,
+          amount: payment.amount,
+          dueDate: payment.dueDate,
+          status: payment.status,
+          note: payment.note,
+        }),
+      );
+  } catch {
+    return [];
+  }
+};
+
+const updatePaymentStateFromToolResult = (
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+  normalizedResult: string,
+  currentState: PaymentToolState,
+): PaymentToolState => {
+  if (toolName === "get_pending_payments") {
+    const pendingPaymentsSnapshot = parsePendingPaymentsSnapshot(normalizedResult);
+    const activePaymentId =
+      pendingPaymentsSnapshot.length === 1 && pendingPaymentsSnapshot[0]?.paymentId
+        ? pendingPaymentsSnapshot[0].paymentId
+        : currentState.activePaymentId;
+
+    return {
+      activePaymentId,
+      pendingPaymentsSnapshot,
+    };
+  }
+
+  if (toolName === "get_payment_status" && typeof toolArgs.paymentId === "string") {
+    return {
+      ...currentState,
+      activePaymentId: toolArgs.paymentId,
+    };
+  }
+
+  return currentState;
+};
 
 const routeAfterGeneral = (state: GraphStateType) => {
   const lastMessage = state.messages[state.messages.length - 1];
@@ -39,6 +159,13 @@ const routeAfterRooms = (state: GraphStateType) => {
   return END;
 };
 
+const routeAfterPayments = (state: GraphStateType) => {
+  const lastMessage = state.messages[state.messages.length - 1];
+  if (hasWriteToolCall(lastMessage)) return "confirm_action";
+  if (hasAnyToolCall(lastMessage)) return "tools";
+  return END;
+};
+
 const routeAfterTools = (state: GraphStateType) => {
   const messages = state.messages;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -48,7 +175,17 @@ const routeAfterTools = (state: GraphStateType) => {
 
     if (toolCall.name === "search_long_term_memory") return "general";
     if (["get_profile", "update_profile"].includes(toolCall.name)) return "profile";
-    if (["search_houses", "get_house_detail", "get_room_detail", "search_rooms", "create_booking"].includes(toolCall.name)) return "rooms";
+    if ([
+      "search_houses",
+      "get_house_detail",
+      "get_room_detail",
+      "search_rooms",
+      "create_booking",
+      "get_my_bookings",
+      "get_booking_status",
+      "cancel_booking",
+    ].includes(toolCall.name)) return "rooms";
+    if (["get_pending_payments", "get_payment_status", "get_payment_history", "upload_payment_proof"].includes(toolCall.name)) return "payments";
   }
 
   return END;
@@ -60,11 +197,15 @@ const routeAfterResolveConfirmation = (state: GraphStateType) => {
 };
 
 const buildGraph = async () => {
-  const allTools = await getAllTools();
-  
   // Custom Secure Tool Node (Middleware)
   const secureToolNode = async (state: GraphStateType) => {
-    const { messages, userId } = state;
+    const {
+      messages,
+      userId,
+      paymentProofImageUrl,
+      activePaymentId,
+      pendingPaymentsSnapshot,
+    } = state;
     const lastMessage = messages[messages.length - 1] as AIMessage;
     const toolCalls = lastMessage.tool_calls;
     
@@ -74,6 +215,11 @@ const buildGraph = async () => {
     }
 
     try {
+      const allTools = await getAllTools();
+      let paymentToolState: PaymentToolState = {
+        activePaymentId,
+        pendingPaymentsSnapshot,
+      };
       const toolMessages = await Promise.all(
         toolCalls.map(async (tc) => {
           const tool = allTools.find((t) => t.name === tc.name);
@@ -85,19 +231,32 @@ const buildGraph = async () => {
             });
           }
 
-          log.info({ toolName: tc.name, userId, args: tc.args }, "Executing secure tool call");
-          
+          const toolArgs =
+            tc.name === "upload_payment_proof" && paymentProofImageUrl
+              ? { ...tc.args, imageUrl: paymentProofImageUrl }
+              : tc.args;
+
+          log.info({ toolName: tc.name, userId, args: toolArgs }, "Executing secure tool call");
+
           try {
-            const result = await callSecureMcpTool(userId, tc.name, tc.args);
+            const result = await callSecureMcpTool(userId, tc.name, toolArgs);
             log.info({ toolName: tc.name, resultType: typeof result }, "Tool invocation successful");
-            
-            // Log a bit of the result to see the structure
-            const resultStr = typeof result === "string" ? result : JSON.stringify(result);
-            log.info({ toolName: tc.name, resultSnippet: resultStr.slice(0, 100) }, "Result processed");
+            const normalizedResult = normalizeMcpToolResult(result);
+            paymentToolState = updatePaymentStateFromToolResult(
+              tc.name,
+              toolArgs,
+              normalizedResult,
+              paymentToolState,
+            );
+
+            log.info(
+              { toolName: tc.name, resultSnippet: normalizedResult.slice(0, 100) },
+              "Result processed",
+            );
 
             return new ToolMessage({
               tool_call_id: tc.id ?? "",
-              content: resultStr,
+              content: normalizedResult,
             });
           } catch (error: any) {
             log.error({ error: error.message, toolName: tc.name }, "Tool execution crashed inside callSecureMcpTool");
@@ -109,7 +268,11 @@ const buildGraph = async () => {
         })
       );
 
-      return { messages: toolMessages };
+      return {
+        messages: toolMessages,
+        activePaymentId: paymentToolState.activePaymentId,
+        pendingPaymentsSnapshot: paymentToolState.pendingPaymentsSnapshot,
+      };
     } catch (error: any) {
       log.error({ error: error.message }, "Critical failure in secureToolNode Promise.all");
       throw error;
@@ -122,19 +285,23 @@ const buildGraph = async () => {
     .addNode("general", generalNode)
     .addNode("profile", profileNode)
     .addNode("rooms", roomsNode)
+    .addNode("payments", paymentsNode)
     .addNode("tools", secureToolNode)
     .addNode("confirm_action", prepareConfirmationNode)
     .addNode("resolve_confirmation", resolveConfirmationNode)
     .addNode("execute_pending", executePendingActionNode)
     .addNode("media_extractor", mediaExtractorNode)
+    .addNode("vision", visionProcessorNode)
 
     .addEdge(START, "memory")
-    .addEdge("memory", "supervisor")
+    .addEdge("memory", "vision")
+    .addEdge("vision", "supervisor")
 
     .addConditionalEdges("supervisor", (state: GraphStateType) => state.next, {
       general: "general",
       profile: "profile",
       rooms: "rooms",
+      payments: "payments",
       resolve_confirmation: "resolve_confirmation",
     })
 
@@ -155,6 +322,12 @@ const buildGraph = async () => {
       [END]: END,
     })
 
+    .addConditionalEdges("payments", routeAfterPayments, {
+      confirm_action: "confirm_action",
+      tools: "tools",
+      [END]: END,
+    })
+
     .addEdge("confirm_action", END)
     .addConditionalEdges("resolve_confirmation", routeAfterResolveConfirmation, {
       execute_pending: "execute_pending",
@@ -167,6 +340,7 @@ const buildGraph = async () => {
       general: "general",
       profile: "profile",
       rooms: "rooms",
+      payments: "payments",
       [END]: END,
     });
 
@@ -208,16 +382,44 @@ export const runChat = async (
   userId: string,
   chatId: string,
   message: string,
+  images: string[] = [],
+  paymentProofImageUrl = "",
 ): Promise<{ text: string; imageUrls: string[] }> => {
   const graph = await getCompiledGraph();
   const threadId = chatId;
 
-  log.info({ threadId, userId }, "Running chat");
+  log.info({ threadId, userId, hasImages: images.length > 0 }, "Running chat");
+
+  const imageParts = images
+    .filter((image) => {
+      const isBase64Image = image.startsWith("data:image/");
+      if (!isBase64Image) {
+        log.warn({ image }, "Skipping non-base64 image input");
+      }
+      return isBase64Image;
+    })
+    .map((image) => ({
+      type: "image_url",
+      image_url: {
+        url: image,
+      },
+    }));
+
+  const content = imageParts.length > 0
+    ? [{ type: "text", text: message }, ...imageParts]
+    : message;
+
+  if (imageParts.length > 0) {
+    log.info({ imageCount: imageParts.length }, "Base64 images attached to message");
+  }
 
   const result = await graph.invoke(
     {
-      messages: [new HumanMessage(message)],
+      messages: [new HumanMessage(content)],
       userId,
+      visionAnalysis: "", // Reset vision analysis for this turn
+      visionResult: null, // Reset structured vision result for this turn
+      paymentProofImageUrl, // Reset proof image URL for this turn
       imageUrls: [], // Reset images for this turn
     },
     {

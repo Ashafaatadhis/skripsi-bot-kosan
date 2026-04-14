@@ -12,6 +12,7 @@ const main = async () => {
 
   // Initialize graph
   await initGraph();
+  logger.info("Graph initialized without MCP warmup");
 
   // Create and launch bot
   const bot = createBot();

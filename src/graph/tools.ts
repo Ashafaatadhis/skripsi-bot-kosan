@@ -8,7 +8,17 @@ const log = createLogger("tools");
 export const TOOL_MAPPINGS = {
   general: ["search_long_term_memory"],
   profile: ["get_profile", "update_profile"],
-  rooms: ["search_houses", "get_house_detail", "get_room_detail", "search_rooms", "create_booking"],
+  rooms: [
+    "search_houses",
+    "get_house_detail",
+    "get_room_detail",
+    "search_rooms",
+    "create_booking",
+    "get_my_bookings",
+    "get_booking_status",
+    "cancel_booking",
+  ],
+  payments: ["get_pending_payments", "get_payment_status", "get_payment_history", "upload_payment_proof"],
 } as const;
 
 export type AgentWithTools = keyof typeof TOOL_MAPPINGS;
@@ -18,7 +28,7 @@ export const WRITE_TOOLS = [
   "update_profile",
   "create_booking",
   "cancel_booking",
-  "pay_invoice",
+  "upload_payment_proof",
 ] as const;
 
 export const isWriteTool = (toolName: string): boolean => {
@@ -58,17 +68,13 @@ export const getAllTools = async (): Promise<StructuredToolInterface[]> => {
 
 
 /**
- * Memberikan daftar tool ke AI tapi sudah dibersihkan dari parameter ID internal.
- * Tujuannya agar AI "buta" terhadap ID dan tidak bisa memanipulasinya.
+ * Memberikan subset tool yang relevan untuk agent tertentu.
+ * Kontrak human-readable ID ditegakkan di layer MCP/service.
  */
 export const getToolsForAI = async (agent: AgentWithTools): Promise<any[]> => {
   const tools = await getToolsForAgent(agent);
-  
-  return tools.map((tool) => {
-    // Kita buat salinan tool tapi dengan skema yang disembunyikan ID-nya
-    // Catatan: Ini cara cepat untuk presentasi skripsi (Hiding via Prompt/Schema)
-    return tool; 
-  });
+
+  return tools.map((tool) => tool);
 };
 
 export const getToolsForAgent = async (
