@@ -14,10 +14,17 @@ export interface VisionResult {
 
 export interface PendingPaymentSnapshot {
   paymentId: string;
+  monthsPaid?: number;
   amount?: number;
-  dueDate?: string;
+  periodStart?: string;
+  periodEnd?: string;
   status?: string;
   note?: string;
+}
+
+export interface PendingRentalDraft {
+  roomId: string;
+  startDate: string;
 }
 
 // Pending action for confirmation
@@ -108,6 +115,21 @@ export const GraphState = Annotation.Root({
   pendingPaymentsSnapshot: Annotation<PendingPaymentSnapshot[]>({
     reducer: (_, update) => update,
     default: () => [],
+  }),
+
+  // Draft sewa yang sedang dikumpulkan lintas turn
+  pendingRentalDraft: Annotation<PendingRentalDraft>({
+    reducer: (_, update) => update,
+    default: () => ({
+      roomId: "",
+      startDate: "",
+    }),
+  }),
+
+  // Menandai bahwa sistem sedang menunggu tanggal mulai sewa untuk draft saat ini
+  awaitingRentalStartDate: Annotation<boolean>({
+    reducer: (_, update) => update,
+    default: () => false,
   }),
 
   // Images found during tool execution (reset each turn)

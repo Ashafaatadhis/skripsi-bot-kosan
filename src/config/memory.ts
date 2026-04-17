@@ -27,7 +27,7 @@ export const FACT_CATEGORIES = [
   "profile",         // nama, nomor HP, pekerjaan
   "preference",      // budget ideal, lokasi, fasilitas
   "constraint",      // batasan: budget max, lantai, dll
-  "booking_context", // kamar yang disewa, durasi
+  "rental_context",  // kamar yang disewa, periode aktif
 ] as const;
 
 export type FactCategory = (typeof FACT_CATEGORIES)[number];

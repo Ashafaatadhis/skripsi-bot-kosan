@@ -13,12 +13,12 @@ export const TOOL_MAPPINGS = {
     "get_house_detail",
     "get_room_detail",
     "search_rooms",
-    "create_booking",
-    "get_my_bookings",
-    "get_booking_status",
-    "cancel_booking",
+    "create_rental",
+    "get_my_rentals",
+    "get_rental_status",
+    "cancel_rental",
   ],
-  payments: ["get_pending_payments", "get_payment_status", "get_payment_history", "upload_payment_proof"],
+  payments: ["create_payment", "get_pending_payments", "get_payment_status", "get_payment_history", "upload_payment_proof"],
 } as const;
 
 export type AgentWithTools = keyof typeof TOOL_MAPPINGS;
@@ -26,8 +26,9 @@ export type AgentWithTools = keyof typeof TOOL_MAPPINGS;
 // Tools that require confirmation before execution
 export const WRITE_TOOLS = [
   "update_profile",
-  "create_booking",
-  "cancel_booking",
+  "create_rental",
+  "cancel_rental",
+  "create_payment",
   "upload_payment_proof",
 ] as const;
 

@@ -63,8 +63,11 @@ const extractLatestHumanPaymentId = (
 const formatPaymentChoices = (payments: PendingPaymentSnapshot[]): string =>
   payments
     .map((payment) => {
-      const dueDate = payment.dueDate ? ` (jatuh tempo ${payment.dueDate})` : "";
-      return `- <code>${payment.paymentId}</code>${dueDate}`;
+      const period =
+        payment.periodStart && payment.periodEnd
+          ? ` (${payment.periodStart} s/d ${payment.periodEnd})`
+          : "";
+      return `- <code>${payment.paymentId}</code>${period}`;
     })
     .join("\n");
 
@@ -232,6 +235,13 @@ const handleHumanPaymentIntent = (
           `Siap. Kita lanjut untuk tagihan <code>${activePaymentId}</code>. Kirim foto bukti bayarnya dulu, nanti aku minta konfirmasi sebelum upload.`,
         ),
       ],
+      activePaymentId,
+    };
+  }
+
+  if (isExplicitPayIntent(latestHumanText) && !resolvedPaymentId) {
+    return {
+      messages: [buildToolCallMessage("get_pending_payments", {})],
       activePaymentId,
     };
   }

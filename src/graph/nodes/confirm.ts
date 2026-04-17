@@ -52,11 +52,16 @@ const getActionDescription = (toolName: string, args: Record<string, unknown>): 
       if (args.phone) updates.push(`nomor HP menjadi "<b>${escapeHtml(String(args.phone))}</b>"`);
       return `mengubah ${updates.join(" dan ")}`;
     }
-    case "create_booking": {
-      return `mem-booking kamar <b>${escapeHtml(String(args.roomId))}</b> mulai tanggal <b>${escapeHtml(String(args.startDate))}</b> selama <b>${args.duration} bulan</b>`;
+    case "create_rental": {
+      return `memulai sewa kamar <b>${escapeHtml(String(args.roomId))}</b> mulai tanggal <b>${escapeHtml(String(args.startDate))}</b>`;
     }
-    case "cancel_booking": {
-      return `membatalkan booking <b>${escapeHtml(String(args.bookingId))}</b>`;
+    case "cancel_rental": {
+      return `membatalkan sewa <b>${escapeHtml(String(args.rentalId))}</b>`;
+    }
+    case "create_payment": {
+      return `membuat tagihan pembayaran untuk <b>${escapeHtml(String(args.monthsPaid))} bulan</b>${
+        args.rentalId ? ` pada sewa <b>${escapeHtml(String(args.rentalId))}</b>` : ""
+      }`;
     }
     case "upload_payment_proof": {
       return `mengunggah bukti pembayaran untuk tagihan <b>${escapeHtml(String(args.paymentId))}</b>`;
@@ -131,7 +136,7 @@ export const prepareConfirmationNode = async (
 export const resolveConfirmationNode = async (
   state: GraphStateType,
 ): Promise<Partial<GraphStateType>> => {
-  const { pendingAction, messages } = state;
+  const { pendingAction, messages, pendingRentalDraft, awaitingRentalStartDate } = state;
 
   if (!pendingAction) {
     log.warn("No pending action to resolve");
@@ -151,6 +156,14 @@ export const resolveConfirmationNode = async (
       messages: [new AIMessage("Okeee, batal dulu yaa 👌")],
       next: "end",
       pendingAction: null,
+      pendingRentalDraft:
+        pendingAction.toolName === "create_rental"
+          ? { roomId: "", startDate: "" }
+          : pendingRentalDraft,
+      awaitingRentalStartDate:
+        pendingAction.toolName === "create_rental"
+          ? false
+          : awaitingRentalStartDate,
     };
   }
 
@@ -175,7 +188,14 @@ export const resolveConfirmationNode = async (
 export const executePendingActionNode = async (
   state: GraphStateType,
 ): Promise<Partial<GraphStateType>> => {
-  const { pendingAction, userId, paymentProofImageUrl, activePaymentId } = state;
+  const {
+    pendingAction,
+    userId,
+    paymentProofImageUrl,
+    activePaymentId,
+    pendingRentalDraft,
+    awaitingRentalStartDate,
+  } = state;
 
   if (!pendingAction) {
     log.warn("No pending action to execute");
@@ -224,12 +244,11 @@ export const executePendingActionNode = async (
         
         if (pendingAction.toolName === "update_profile" && parsed.profile) {
           responseText = `Sip, profil kamu udah ke-update ✨\nNama: ${parsed.profile.name}\nHP: ${parsed.profile.phone || "-"}`;
-        } else if (pendingAction.toolName === "create_booking") {
-          const firstPayment = parsed.payments?.[0];
-          const paymentInfo = firstPayment 
-            ? `\n💰 Tagihan pertama: <b>Rp ${firstPayment.amount.toLocaleString("id-ID")}</b> (cek di menu pembayaran ya!)`
-            : "";
-          responseText = `<b>Hore! Booking berhasil dibuat ✨</b>\n\nKamar <b>${parsed.room?.name}</b> di <b>${parsed.room?.kosan?.name}</b> sudah dipesan untuk kamu.${paymentInfo}\n\nAda lagi yang bisa aku bantu?`;
+        } else if (pendingAction.toolName === "create_rental") {
+          responseText = `<b>Sewa berhasil dibuat ✨</b>\n\nKamar <b>${parsed.room?.name}</b> di <b>${parsed.room?.kosan?.name}</b> sudah aktif untuk kamu mulai <b>${parsed.startDate?.slice?.(0, 10) ?? "-"}</b>.\n\nKalau mau lanjut bayar, bilang aja mau bayar berapa bulan ya.`;
+        } else if (pendingAction.toolName === "create_payment") {
+          const payment = parsed.payment;
+          responseText = `<b>Tagihan berhasil dibuat ✨</b>\n\nID tagihan: <code>${payment?.humanId ?? "-"}</code>\nPeriode: <b>${payment?.periodStart?.slice?.(0, 10) ?? "-"} s/d ${payment?.periodEnd?.slice?.(0, 10) ?? "-"}</b>\nTotal: <b>Rp ${(payment?.amount ?? 0).toLocaleString("id-ID")}</b>\n\nSekarang kirim bukti bayarnya ya, nanti admin verifikasi.`;
         } else if (parsed.message) {
           responseText = parsed.message;
         } else {
@@ -247,6 +266,14 @@ export const executePendingActionNode = async (
       pendingAction: null,
       activePaymentId:
         pendingAction.toolName === "upload_payment_proof" ? "" : activePaymentId,
+      pendingRentalDraft:
+        pendingAction.toolName === "create_rental"
+          ? { roomId: "", startDate: "" }
+          : pendingRentalDraft,
+      awaitingRentalStartDate:
+        pendingAction.toolName === "create_rental"
+          ? false
+          : awaitingRentalStartDate,
     };
   } catch (error) {
     log.error({ error, pendingAction }, "Failed to execute action");

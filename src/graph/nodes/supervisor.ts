@@ -40,11 +40,10 @@ const ROOMS_KEYWORDS = [
   "kos",
   "kosan",
   "kamar",
-  "booking",
   "pesan kamar",
-  "status booking",
-  "booking saya",
-  "batalkan booking",
+  "status sewa",
+  "sewa saya",
+  "batalkan sewa",
   "sewa",
 ];
 
@@ -161,6 +160,7 @@ export const supervisorNode = async (
     visionAnalysis,
     visionResult,
     paymentProofImageUrl,
+    awaitingRentalStartDate,
   } = state;
   const textMessages = toTextOnlyMessages(messages);
 
@@ -168,6 +168,11 @@ export const supervisorNode = async (
   if (pendingAction) {
     log.info({ pendingAction: pendingAction.toolName }, "Strict routing to confirmation resolver");
     return { next: "resolve_confirmation" };
+  }
+
+  if (awaitingRentalStartDate) {
+    log.info("Routing to rooms because rental draft is awaiting start date");
+    return { next: "rooms" };
   }
 
   const chain = supervisorPrompt.pipe(llm);

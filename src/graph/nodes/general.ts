@@ -1,4 +1,5 @@
 import { GraphStateType } from "../state.js";
+import { SystemMessage } from "@langchain/core/messages";
 import { llm } from "../../llm/index.js";
 import { generalPrompt } from "../../prompts/index.js";
 import { getTimeContext } from "../../lib/time.js";
@@ -16,6 +17,7 @@ export const generalNode = async (
   const textMessages = toTextOnlyMessages(messages);
 
   const tools = await getGeneralTools();
+  const allowedToolNames = new Set(tools.map((tool) => String(tool.name)));
   const llmWithTools = tools.length > 0 ? llm.bindTools(tools) : llm;
 
   const prompt = await generalPrompt.invoke({
@@ -26,7 +28,27 @@ export const generalNode = async (
     messages: textMessages,
   });
 
-  const response = await llmWithTools.invoke(prompt);
+  let response = await llmWithTools.invoke(prompt);
+  const disallowedToolCalls =
+    response.tool_calls?.filter((toolCall) => !allowedToolNames.has(String(toolCall.name))) ?? [];
+
+  if (disallowedToolCalls.length > 0) {
+    log.warn(
+      {
+        userId,
+        disallowedToolCalls: disallowedToolCalls.map((toolCall) => toolCall.name),
+        allowedToolNames: Array.from(allowedToolNames),
+      },
+      "General agent attempted to call tools outside its whitelist; retrying without tools",
+    );
+
+    response = await llm.invoke([
+      ...prompt.messages,
+      new SystemMessage(
+        "Jawab ulang pesan user terakhir tanpa tool call apa pun. Jangan memanggil tool transaksi, profil, pembayaran, atau sewa.",
+      ),
+    ]);
+  }
 
   log.info(
     {

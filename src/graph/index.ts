@@ -32,8 +32,10 @@ type McpToolResult = {
 
 type PendingPaymentPayload = {
   humanId?: string;
+  monthsPaid?: number;
   amount?: number;
-  dueDate?: string;
+  periodStart?: string;
+  periodEnd?: string;
   status?: string;
   note?: string;
 };
@@ -99,8 +101,10 @@ const parsePendingPaymentsSnapshot = (
       .map(
         (payment): PendingPaymentSnapshot => ({
           paymentId: payment.humanId as string,
+          monthsPaid: payment.monthsPaid,
           amount: payment.amount,
-          dueDate: payment.dueDate,
+          periodStart: payment.periodStart,
+          periodEnd: payment.periodEnd,
           status: payment.status,
           note: payment.note,
         }),
@@ -134,6 +138,23 @@ const updatePaymentStateFromToolResult = (
       ...currentState,
       activePaymentId: toolArgs.paymentId,
     };
+  }
+
+  if (toolName === "create_payment") {
+    try {
+      const parsed = JSON.parse(normalizedResult) as {
+        payment?: { humanId?: string };
+      };
+
+      if (typeof parsed.payment?.humanId === "string") {
+        return {
+          ...currentState,
+          activePaymentId: parsed.payment.humanId,
+        };
+      }
+    } catch {
+      return currentState;
+    }
   }
 
   return currentState;
@@ -180,12 +201,12 @@ const routeAfterTools = (state: GraphStateType) => {
       "get_house_detail",
       "get_room_detail",
       "search_rooms",
-      "create_booking",
-      "get_my_bookings",
-      "get_booking_status",
-      "cancel_booking",
+      "create_rental",
+      "get_my_rentals",
+      "get_rental_status",
+      "cancel_rental",
     ].includes(toolCall.name)) return "rooms";
-    if (["get_pending_payments", "get_payment_status", "get_payment_history", "upload_payment_proof"].includes(toolCall.name)) return "payments";
+    if (["create_payment", "get_pending_payments", "get_payment_status", "get_payment_history", "upload_payment_proof"].includes(toolCall.name)) return "payments";
   }
 
   return END;
