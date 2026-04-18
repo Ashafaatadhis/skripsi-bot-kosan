@@ -39,7 +39,7 @@ export const profileNode = async (
     ...time,
     userId,
     summary: summary ? `Konteks percakapan:\n${summary}` : "",
-    messages,
+    messages: textMessages,
   });
 
   const response = await llmWithTools.invoke(prompt);

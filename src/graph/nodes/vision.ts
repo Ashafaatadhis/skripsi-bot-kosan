@@ -105,7 +105,12 @@ Aturan:
 - kind=payment_proof jika gambar terlihat seperti struk, bukti transfer, atau screenshot transaksi bank/e-wallet.
 - kind=non_payment jika jelas bukan bukti pembayaran.
 - kind=unknown jika tidak cukup yakin.
-- summary harus singkat dan fokus pada informasi yang relevan.`,
+- summary harus singkat, spesifik, dan fokus pada isi visual utama yang benar-benar terlihat.
+- Jika kind=payment_proof, summary ringkas isi bukti pembayaran yang penting.
+- Jika kind=non_payment, JANGAN tulis kalimat generik seperti "Gambar bukan bukti pembayaran".
+  Sebaliknya, jelaskan subjek utama gambar secara konkret, misalnya orang/hewan/objek/tempat/aktivitas yang terlihat.
+- Jika user menyertakan teks/caption pada pesan yang sama, gunakan itu hanya sebagai konteks tambahan. Tetap utamakan apa yang benar-benar terlihat di gambar.
+- Jika gambar tidak jelas, jelaskan keterbatasannya secara singkat di summary, jangan mengarang detail.`,
       ),
       lastMessage,
     ]);

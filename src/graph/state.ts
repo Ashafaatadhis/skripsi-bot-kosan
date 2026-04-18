@@ -22,10 +22,7 @@ export interface PendingPaymentSnapshot {
   note?: string;
 }
 
-export interface PendingRentalDraft {
-  roomId: string;
-  startDate: string;
-}
+export type PaymentStage = "idle" | "choosing_payment" | "awaiting_proof";
 
 // Pending action for confirmation
 export interface PendingAction {
@@ -117,19 +114,10 @@ export const GraphState = Annotation.Root({
     default: () => [],
   }),
 
-  // Draft sewa yang sedang dikumpulkan lintas turn
-  pendingRentalDraft: Annotation<PendingRentalDraft>({
+  // Current payment flow stage for deterministic follow-up handling
+  paymentStage: Annotation<PaymentStage>({
     reducer: (_, update) => update,
-    default: () => ({
-      roomId: "",
-      startDate: "",
-    }),
-  }),
-
-  // Menandai bahwa sistem sedang menunggu tanggal mulai sewa untuk draft saat ini
-  awaitingRentalStartDate: Annotation<boolean>({
-    reducer: (_, update) => update,
-    default: () => false,
+    default: () => "idle",
   }),
 
   // Images found during tool execution (reset each turn)

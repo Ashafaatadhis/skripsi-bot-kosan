@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import {
   GraphStateType,
+  PaymentStage,
   PendingPaymentSnapshot,
   VisionResult,
 } from "../state.js";
@@ -15,10 +16,10 @@ import { getTimeContext } from "../../lib/time.js";
 const log = createLogger("node-payments");
 
 const PAYMENT_ID_REGEX = /\bPYM-[A-Z0-9]+\b/i;
-const PAY_INTENT_REGEX =
-  /\b(bayar|bayarin|lunas|upload|unggah|kirim|kirimkan|konfirmasi)\b/i;
-const PENDING_REQUEST_REGEX =
-  /\b(pending|tagihan|riwayat pembayaran|riwayat tagihan|cek pembayaran|pembayaran saya)\b/i;
+const EXIT_PAYMENT_FLOW_REGEX =
+  /\b(batal|gak jadi|nggak jadi|ga jadi|nanti dulu|skip|stop|keluar)\b/i;
+const EXIT_PAYMENT_FLOW_HINT =
+  'Kalau mau keluar dari alur pembayaran, ketik "batal".';
 
 const buildToolCallMessage = (
   toolName: string,
@@ -78,9 +79,16 @@ const getSinglePendingPaymentId = (
   return payments[0]?.paymentId || "";
 };
 
-const isPendingRequest = (text: string): boolean => PENDING_REQUEST_REGEX.test(text);
+const isKnownPendingPaymentId = (
+  payments: PendingPaymentSnapshot[],
+  paymentId: string,
+): boolean => payments.some((payment) => payment.paymentId === paymentId);
 
-const isExplicitPayIntent = (text: string): boolean => PAY_INTENT_REGEX.test(text);
+const normalizePaymentSelectionText = (text: string): string =>
+  text.replace(/[`"'<>.,!?()\s]/g, "").toUpperCase();
+
+const isPaymentIdOnlyText = (text: string, paymentId: string): boolean =>
+  normalizePaymentSelectionText(text) === paymentId.toUpperCase();
 
 type PaymentContext = {
   latestMessageIsHuman: boolean;
@@ -106,6 +114,10 @@ const buildPaymentContext = (state: GraphStateType): PaymentContext => {
   const latestMessageIsHuman = isLatestMessageHuman(state.messages);
   const latestHumanText = getLatestHumanText(state.messages);
   const explicitPaymentId = extractLatestHumanPaymentId(state.messages);
+  const visionKind = state.visionResult?.kind ?? "unknown";
+  const hasImageInput = Boolean(state.paymentProofImageUrl);
+  const expectsPaymentProof =
+    state.paymentStage !== "idle" || Boolean(state.activePaymentId);
 
   return {
     latestMessageIsHuman,
@@ -116,20 +128,218 @@ const buildPaymentContext = (state: GraphStateType): PaymentContext => {
       state.activePaymentId,
       state.pendingPaymentsSnapshot,
     ),
-    hasProofImage: Boolean(state.paymentProofImageUrl),
-    visionKind: state.visionResult?.kind ?? "unknown",
+    hasProofImage: hasImageInput && (visionKind === "payment_proof" || expectsPaymentProof),
+    visionKind,
   };
 };
 
-const buildChoosePaymentReply = (payments: PendingPaymentSnapshot[]): AIMessage =>
+const buildChoosePaymentReply = (
+  payments: PendingPaymentSnapshot[],
+  intro = "Pilih dulu tagihan mana yang mau diproses ya:",
+): AIMessage =>
   reply(
-    `Bukti bayarnya sudah masuk. Sebelum aku unggah, pilih dulu tagihan mana yang mau dibayarkan ya:\n${formatPaymentChoices(payments)}\n\nBalas dengan ID tagihan, misalnya <code>${payments[0]?.paymentId}</code>.`,
+    `${intro}\n${formatPaymentChoices(payments)}\n\nBalas dengan ID tagihan, misalnya <code>${payments[0]?.paymentId}</code>. ${EXIT_PAYMENT_FLOW_HINT}`,
   );
 
 const buildAskForProofReply = (paymentId: string): AIMessage =>
   reply(
-    `Siap. Tagihan <code>${paymentId}</code> sudah aku tandai. Sekarang kirim foto bukti bayar dulu, nanti aku minta konfirmasi sebelum mengunggahnya.`,
+    `Siap. Tagihan <code>${paymentId}</code> sudah aku tandai. Sekarang kirim foto bukti bayar dulu, nanti aku minta konfirmasi sebelum mengunggahnya. ${EXIT_PAYMENT_FLOW_HINT}`,
   );
+
+const buildUnknownPaymentReply = (
+  paymentId: string,
+  payments: PendingPaymentSnapshot[],
+): AIMessage => {
+  if (payments.length === 0) {
+    return reply(
+      `Aku belum punya daftar tagihan pending untuk memastikan <code>${paymentId}</code>. Aku cek dulu tagihan aktifnya ya. ${EXIT_PAYMENT_FLOW_HINT}`,
+    );
+  }
+
+  return reply(
+    `Aku belum nemu tagihan <code>${paymentId}</code> di daftar pending saat ini.\n${formatPaymentChoices(payments)}\n\nBalas dengan salah satu ID di atas ya. ${EXIT_PAYMENT_FLOW_HINT}`,
+  );
+};
+
+const getAwaitingProofReply = (paymentId: string): AIMessage =>
+  reply(
+    `Tagihan <code>${paymentId}</code> sudah dipilih. Sekarang kirim foto bukti bayarnya ya, nanti aku bantu lanjut sampai konfirmasi upload. ${EXIT_PAYMENT_FLOW_HINT}`,
+  );
+
+const getStageAfterSelection = (paymentId: string): PaymentStage =>
+  paymentId ? "awaiting_proof" : "choosing_payment";
+
+const handleExitPaymentFlow = (
+  state: GraphStateType,
+  context: PaymentContext,
+): Partial<GraphStateType> | null => {
+  if (state.paymentStage === "idle") {
+    return null;
+  }
+
+  if (!context.latestMessageIsHuman || context.hasProofImage) {
+    return null;
+  }
+
+  if (!EXIT_PAYMENT_FLOW_REGEX.test(context.latestHumanText)) {
+    return null;
+  }
+
+  return {
+    messages: [
+      reply(
+        'Oke, alur pembayaran aku hentikan dulu. Kalau mau lanjut lagi nanti bilang saja.',
+      ),
+    ],
+    activePaymentId: "",
+    pendingPaymentsSnapshot: [],
+    paymentStage: "idle",
+  };
+};
+
+const handleExplicitPaymentSelection = (
+  state: GraphStateType,
+  context: PaymentContext,
+): Partial<GraphStateType> | null => {
+  const { pendingPaymentsSnapshot } = state;
+  const { latestMessageIsHuman, latestHumanText, explicitPaymentId, hasProofImage } =
+    context;
+
+  if (!latestMessageIsHuman || hasProofImage || !explicitPaymentId) {
+    return null;
+  }
+
+  if (!isPaymentIdOnlyText(latestHumanText, explicitPaymentId)) {
+    return null;
+  }
+
+  if (
+    pendingPaymentsSnapshot.length > 0 &&
+    !isKnownPendingPaymentId(pendingPaymentsSnapshot, explicitPaymentId)
+  ) {
+    return {
+      messages: [buildUnknownPaymentReply(explicitPaymentId, pendingPaymentsSnapshot)],
+      paymentStage: pendingPaymentsSnapshot.length > 0 ? "choosing_payment" : "idle",
+    };
+  }
+
+  return {
+    messages: [buildAskForProofReply(explicitPaymentId)],
+    activePaymentId: explicitPaymentId,
+    paymentStage: getStageAfterSelection(explicitPaymentId),
+  };
+};
+
+const handleChoosingPaymentStage = (
+  state: GraphStateType,
+  context: PaymentContext,
+): Partial<GraphStateType> | null => {
+  if (state.paymentStage !== "choosing_payment" || !context.latestMessageIsHuman) {
+    return null;
+  }
+
+  if (!context.explicitPaymentId) {
+    if (state.pendingPaymentsSnapshot.length === 0) {
+      return {
+        messages: [buildToolCallMessage("get_pending_payments", {})],
+        paymentStage: "choosing_payment",
+      };
+    }
+
+    return {
+      messages: [
+        buildChoosePaymentReply(
+          state.pendingPaymentsSnapshot,
+          "Aku masih butuh ID tagihan dulu biar bisa lanjut:",
+        ),
+      ],
+      paymentStage: "choosing_payment",
+    };
+  }
+
+  if (
+    state.pendingPaymentsSnapshot.length > 0 &&
+    !isKnownPendingPaymentId(state.pendingPaymentsSnapshot, context.explicitPaymentId)
+  ) {
+    return {
+      messages: [
+        buildUnknownPaymentReply(
+          context.explicitPaymentId,
+          state.pendingPaymentsSnapshot,
+        ),
+      ],
+      paymentStage: "choosing_payment",
+    };
+  }
+
+  return {
+    messages: [buildAskForProofReply(context.explicitPaymentId)],
+    activePaymentId: context.explicitPaymentId,
+    paymentStage: "awaiting_proof",
+  };
+};
+
+const handleAwaitingProofStage = (
+  state: GraphStateType,
+  context: PaymentContext,
+): Partial<GraphStateType> | null => {
+  if (
+    state.paymentStage !== "awaiting_proof" ||
+    !context.latestMessageIsHuman ||
+    context.hasProofImage
+  ) {
+    return null;
+  }
+
+  if (context.explicitPaymentId) {
+    if (
+      state.pendingPaymentsSnapshot.length > 0 &&
+      !isKnownPendingPaymentId(state.pendingPaymentsSnapshot, context.explicitPaymentId)
+    ) {
+      return {
+        messages: [
+          buildUnknownPaymentReply(
+            context.explicitPaymentId,
+            state.pendingPaymentsSnapshot,
+          ),
+        ],
+        paymentStage: state.pendingPaymentsSnapshot.length > 0 ? "choosing_payment" : "idle",
+      };
+    }
+
+    return {
+      messages: [buildAskForProofReply(context.explicitPaymentId)],
+      activePaymentId: context.explicitPaymentId,
+      paymentStage: "awaiting_proof",
+    };
+  }
+
+  if (context.resolvedPaymentId) {
+    return {
+      messages: [getAwaitingProofReply(context.resolvedPaymentId)],
+      activePaymentId: context.resolvedPaymentId,
+      paymentStage: "awaiting_proof",
+    };
+  }
+
+  if (state.pendingPaymentsSnapshot.length > 1) {
+    return {
+      messages: [
+        buildChoosePaymentReply(
+          state.pendingPaymentsSnapshot,
+          "Sebelum kirim bukti bayar, pilih dulu tagihan targetnya ya:",
+        ),
+      ],
+      paymentStage: "choosing_payment",
+    };
+  }
+
+  return {
+    messages: [buildToolCallMessage("get_pending_payments", {})],
+    activePaymentId: state.activePaymentId,
+    paymentStage: "choosing_payment",
+  };
+};
 
 const handleProofImage = (
   state: GraphStateType,
@@ -147,17 +357,25 @@ const handleProofImage = (
     return {
       messages: [
         reply(
-          "Aku sudah menerima gambarnya, tapi itu belum terlihat seperti bukti pembayaran. Kalau ini memang untuk tagihan, kirim foto struk/transfer yang lebih jelas ya.",
+          `Aku sudah menerima gambarnya, tapi itu belum terlihat seperti bukti pembayaran. Kalau ini memang untuk tagihan, kirim foto struk/transfer yang lebih jelas ya. ${EXIT_PAYMENT_FLOW_HINT}`,
         ),
       ],
       activePaymentId: explicitPaymentId || activePaymentId,
+      paymentStage:
+        explicitPaymentId || activePaymentId ? "awaiting_proof" : state.paymentStage,
     };
   }
 
   if (!resolvedPaymentId) {
     if (pendingPaymentsSnapshot.length > 1) {
       return {
-        messages: [buildChoosePaymentReply(pendingPaymentsSnapshot)],
+        messages: [
+          buildChoosePaymentReply(
+            pendingPaymentsSnapshot,
+            "Bukti bayarnya sudah masuk. Sebelum aku unggah, pilih dulu tagihan mana yang mau dibayarkan ya:",
+          ),
+        ],
+        paymentStage: "choosing_payment",
       };
     }
 
@@ -168,6 +386,7 @@ const handleProofImage = (
             "Aku sudah cek, tapi saat ini tidak ada tagihan pending yang bisa dipasangkan dengan bukti bayar itu.",
           ),
         ],
+        paymentStage: "idle",
       };
     }
 
@@ -177,6 +396,7 @@ const handleProofImage = (
     return {
       messages: [buildToolCallMessage("get_pending_payments", {})],
       activePaymentId,
+      paymentStage: "choosing_payment",
     };
   }
 
@@ -192,79 +412,19 @@ const handleProofImage = (
         }),
       ],
       activePaymentId: resolvedPaymentId,
+      paymentStage: "awaiting_proof",
     };
   }
 
   return {
     messages: [
       reply(
-        `Aku sudah menerima gambarnya untuk tagihan <code>${resolvedPaymentId}</code>, tapi masih belum yakin itu bukti pembayaran. Kalau memang benar struk/transfer, kirim gambar yang lebih jelas ya.`,
+        `Aku sudah menerima gambarnya untuk tagihan <code>${resolvedPaymentId}</code>, tapi masih belum yakin itu bukti pembayaran. Kalau memang benar struk/transfer, kirim gambar yang lebih jelas ya. ${EXIT_PAYMENT_FLOW_HINT}`,
       ),
     ],
     activePaymentId: resolvedPaymentId,
+    paymentStage: "awaiting_proof",
   };
-};
-
-const handleHumanPaymentIntent = (
-  state: GraphStateType,
-  context: PaymentContext,
-): Partial<GraphStateType> | null => {
-  const { activePaymentId } = state;
-  const {
-    latestMessageIsHuman,
-    latestHumanText,
-    explicitPaymentId,
-    resolvedPaymentId,
-  } = context;
-
-  if (!latestMessageIsHuman) {
-    return null;
-  }
-
-  if (explicitPaymentId && isExplicitPayIntent(latestHumanText)) {
-    return {
-      messages: [buildAskForProofReply(explicitPaymentId)],
-      activePaymentId: explicitPaymentId,
-    };
-  }
-
-  if (!explicitPaymentId && activePaymentId && isExplicitPayIntent(latestHumanText)) {
-    return {
-      messages: [
-        reply(
-          `Siap. Kita lanjut untuk tagihan <code>${activePaymentId}</code>. Kirim foto bukti bayarnya dulu, nanti aku minta konfirmasi sebelum upload.`,
-        ),
-      ],
-      activePaymentId,
-    };
-  }
-
-  if (isExplicitPayIntent(latestHumanText) && !resolvedPaymentId) {
-    return {
-      messages: [buildToolCallMessage("get_pending_payments", {})],
-      activePaymentId,
-    };
-  }
-
-  if (!latestHumanText && resolvedPaymentId) {
-    return {
-      messages: [
-        reply(
-          `Untuk tagihan <code>${resolvedPaymentId}</code>, kirim foto bukti bayarnya dulu ya. Setelah itu aku akan minta konfirmasi sebelum mengunggah.`,
-        ),
-      ],
-      activePaymentId: resolvedPaymentId,
-    };
-  }
-
-  if (isPendingRequest(latestHumanText)) {
-    return {
-      messages: [buildToolCallMessage("get_pending_payments", {})],
-      activePaymentId,
-    };
-  }
-
-  return null;
 };
 
 export const paymentsNode = async (
@@ -280,9 +440,24 @@ export const paymentsNode = async (
     return proofImageResult;
   }
 
-  const humanIntentResult = handleHumanPaymentIntent(state, paymentContext);
-  if (humanIntentResult) {
-    return humanIntentResult;
+  const exitPaymentFlowResult = handleExitPaymentFlow(state, paymentContext);
+  if (exitPaymentFlowResult) {
+    return exitPaymentFlowResult;
+  }
+
+  const explicitSelectionResult = handleExplicitPaymentSelection(state, paymentContext);
+  if (explicitSelectionResult) {
+    return explicitSelectionResult;
+  }
+
+  const choosingPaymentResult = handleChoosingPaymentStage(state, paymentContext);
+  if (choosingPaymentResult) {
+    return choosingPaymentResult;
+  }
+
+  const awaitingProofResult = handleAwaitingProofStage(state, paymentContext);
+  if (awaitingProofResult) {
+    return awaitingProofResult;
   }
 
   const tools = await getToolsForAI("payments");
@@ -294,7 +469,7 @@ export const paymentsNode = async (
     visionContext: visionAnalysis
       ? `Hasil analisis gambar untuk turn ini:\n${visionAnalysis}`
       : "",
-    proofContext: state.paymentProofImageUrl
+    proofContext: paymentContext.hasProofImage
       ? "Sistem mendeteksi user baru saja mengirim foto bukti bayar pada turn ini."
       : "",
     targetPaymentContext: paymentContext.resolvedPaymentId
@@ -316,5 +491,6 @@ export const paymentsNode = async (
   return {
     messages: [response],
     activePaymentId: paymentContext.resolvedPaymentId,
+    paymentStage: state.paymentStage,
   };
 };

@@ -15,37 +15,13 @@ type SupervisorDecision = {
   needsClarification?: boolean;
 };
 
-const PAYMENT_KEYWORDS = [
-  "tagihan",
-  "bayar",
-  "pembayaran",
-  "bukti bayar",
-  "transfer",
-  "struk",
-  "iuran",
-  "payment",
-];
-
-const PROFILE_KEYWORDS = [
-  "profil",
-  "profile",
-  "akun saya",
-  "siapa saya",
-  "nama saya",
-  "nomor hp",
-  "phone",
-];
-
-const ROOMS_KEYWORDS = [
-  "kos",
-  "kosan",
-  "kamar",
-  "pesan kamar",
-  "status sewa",
-  "sewa saya",
-  "batalkan sewa",
-  "sewa",
-];
+const PAYMENT_ID_REGEX = /\bPYM-[A-Z0-9]+\b/i;
+const escapeRegex = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const ROUTE_REGEX = new RegExp(
+  `\\b(${AGENTS.map(escapeRegex).join("|")})\\b`,
+  "i",
+);
 
 const extractJsonObject = (content: string): string | null => {
   const match = content.match(/\{[\s\S]*\}/);
@@ -85,9 +61,7 @@ const parseSupervisorDecision = (content: string): SupervisorDecision | null => 
     }
   }
 
-  const routeMatch = content
-    .toLowerCase()
-    .match(/\b(general|profile|rooms|payments)\b/);
+  const routeMatch = content.match(ROUTE_REGEX);
 
   if (!routeMatch) return null;
 
@@ -98,19 +72,38 @@ const parseSupervisorDecision = (content: string): SupervisorDecision | null => 
   };
 };
 
-const scoreKeywords = (text: string, keywords: string[]): number =>
-  keywords.reduce(
-    (score, keyword) => score + (text.includes(keyword) ? 1 : 0),
-    0,
-  );
+const getMessageText = (message: BaseMessage): string => {
+  if (typeof message.content === "string") {
+    return message.content;
+  }
 
-const heuristicSupervisorRoute = (
-  conversation: string,
+  if (!Array.isArray(message.content)) {
+    return "";
+  }
+
+  return message.content
+    .filter(
+      (part): part is { type: string; text?: string } =>
+        typeof part === "object" && part !== null,
+    )
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join(" ");
+};
+
+const getLatestHumanText = (messages: BaseMessage[]): string => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.getType?.() === "human") {
+      return getMessageText(messages[i]).trim();
+    }
+  }
+
+  return "";
+};
+
+const fallbackSupervisorDecision = (
   visionResult: VisionResult | null,
-  visionAnalysis: string,
 ): SupervisorDecision => {
-  const text = `${conversation}\n${visionAnalysis}`.toLowerCase();
-
   const visionLooksLikePayment = visionResult?.kind === "payment_proof";
 
   if (visionLooksLikePayment) {
@@ -121,32 +114,10 @@ const heuristicSupervisorRoute = (
     };
   }
 
-  const scores: Record<SupervisorRoute, number> = {
-    general: 0,
-    profile: scoreKeywords(text, PROFILE_KEYWORDS),
-    rooms: scoreKeywords(text, ROOMS_KEYWORDS),
-    payments: scoreKeywords(text, PAYMENT_KEYWORDS),
-  };
-
-  const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]) as Array<
-    [SupervisorRoute, number]
-  >;
-
-  if (ranked[0][1] === 0) {
-    return {
-      route: "general",
-      reason: "No strong heuristic intent signal found.",
-      needsClarification: false,
-    };
-  }
-
-  const isAmbiguous = ranked[0][1] === ranked[1][1] && ranked[0][1] > 0;
   return {
-    route: isAmbiguous ? "general" : ranked[0][0],
-    reason: isAmbiguous
-      ? "Heuristic intent scores are ambiguous."
-      : `Heuristic intent matched ${ranked[0][0]}.`,
-    needsClarification: isAmbiguous,
+    route: "general",
+    reason: "Supervisor output invalid; defaulting to general.",
+    needsClarification: true,
   };
 };
 
@@ -160,9 +131,10 @@ export const supervisorNode = async (
     visionAnalysis,
     visionResult,
     paymentProofImageUrl,
-    awaitingRentalStartDate,
+    paymentStage,
   } = state;
   const textMessages = toTextOnlyMessages(messages);
+  const latestHumanText = getLatestHumanText(textMessages);
 
   // JALUR PAKSA: Hanya jika benar-benar ada yang harus dikonfirmasi
   if (pendingAction) {
@@ -170,9 +142,14 @@ export const supervisorNode = async (
     return { next: "resolve_confirmation" };
   }
 
-  if (awaitingRentalStartDate) {
-    log.info("Routing to rooms because rental draft is awaiting start date");
-    return { next: "rooms" };
+  if (paymentStage !== "idle") {
+    log.info({ paymentStage }, "Routing to payments because payment flow is still active");
+    return { next: "payments" };
+  }
+
+  if (PAYMENT_ID_REGEX.test(latestHumanText)) {
+    log.info({ latestHumanText }, "Routing to payments because latest user message contains a payment ID");
+    return { next: "payments" };
   }
 
   const chain = supervisorPrompt.pipe(llm);
@@ -181,7 +158,7 @@ export const supervisorNode = async (
     agents: AGENTS.join(", "),
     summary: summary ? `Konteks sebelumnya:\n${summary}` : "",
     visionContext: visionAnalysis ? `Hasil analisis gambar:\n${visionAnalysis}` : "",
-    proofContext: paymentProofImageUrl
+    proofContext: visionResult?.kind === "payment_proof"
       ? "Sistem mendeteksi ada foto bukti bayar pada turn ini."
       : "",
     conversation,
@@ -190,14 +167,14 @@ export const supervisorNode = async (
   const rawResponse = String(result.content).trim();
   const parsedDecision = parseSupervisorDecision(rawResponse);
   const decision =
-    parsedDecision ?? heuristicSupervisorRoute(conversation, visionResult, visionAnalysis);
+    parsedDecision ?? fallbackSupervisorDecision(visionResult);
 
   log.info(
     {
       selectedAgent: decision.route,
       reason: decision.reason,
       needsClarification: decision.needsClarification ?? false,
-      usedHeuristicFallback: !parsedDecision,
+      usedFallback: !parsedDecision,
     },
     "Supervisor routed",
   );

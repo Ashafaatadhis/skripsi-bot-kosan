@@ -12,7 +12,7 @@ const log = createLogger("general-agent");
 export const generalNode = async (
   state: GraphStateType,
 ): Promise<Partial<GraphStateType>> => {
-  const { messages, summary, userId } = state;
+  const { messages, summary, userId, visionAnalysis } = state;
   const time = getTimeContext();
   const textMessages = toTextOnlyMessages(messages);
 
@@ -24,6 +24,9 @@ export const generalNode = async (
     ...time,
     userId,
     summary: summary ? `Konteks percakapan:\n${summary}` : "",
+    visionContext: visionAnalysis
+      ? `Hasil analisis gambar untuk turn ini:\n${visionAnalysis}`
+      : "",
     longTermContext: "Gunakan tool search_long_term_memory kalau perlu recall konteks lama.",
     messages: textMessages,
   });

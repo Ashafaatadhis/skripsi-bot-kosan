@@ -5,7 +5,7 @@ import { createLogger } from "../../lib/logger.js";
 import { callSecureMcpTool } from "../../mcp/client.js";
 
 const log = createLogger("confirm");
- 
+
 const escapeHtml = (text: string): string => {
   return text
     .replace(/&/g, "&amp;")
@@ -16,56 +16,105 @@ const escapeHtml = (text: string): string => {
 };
 
 const CONFIRM_KEYWORDS = [
-  "ya", "yes", "oke", "ok", "iya", "yup", "setuju", "lanjut", "konfirmasi",
-  "boleh", "sip", "gas", "okey", "acc", "pastikan", "mantap", "bolehdeh",
+  "ya",
+  "yes",
+  "oke",
+  "ok",
+  "iya",
+  "yup",
+  "setuju",
+  "lanjut",
+  "konfirmasi",
+  "boleh",
+  "sip",
+  "gas",
+  "okey",
+  "acc",
+  "pastikan",
+  "mantap",
+  "bolehdeh",
 ];
+
 const CANCEL_KEYWORDS = [
-  "tidak", "no", "batal", "cancel", "jangan", "gak", "nggak", "enggak",
-  "nanti", "skip", "stop", "hentikan", "belumpengen", "gakjadi", "nantiaja",
+  "tidak",
+  "no",
+  "batal",
+  "cancel",
+  "jangan",
+  "gak",
+  "nggak",
+  "enggak",
+  "nanti",
+  "skip",
+  "stop",
+  "hentikan",
+  "belumpengen",
+  "gakjadi",
+  "nantiaja",
 ];
 
 const isConfirmation = (text: string): boolean => {
   const lower = text.toLowerCase().trim();
   const words = lower.split(/\s+/);
-  const confirmPhrases = ["boleh deh", "oke deh", "siap bos", "lanjut aja", "gas terus"];
+  const confirmPhrases = [
+    "boleh deh",
+    "oke deh",
+    "siap bos",
+    "lanjut aja",
+    "gas terus",
+  ];
+
   return (
-    CONFIRM_KEYWORDS.some((kw) => words.includes(kw)) ||
-    confirmPhrases.some((p) => lower.includes(p))
+    CONFIRM_KEYWORDS.some((keyword) => words.includes(keyword)) ||
+    confirmPhrases.some((phrase) => lower.includes(phrase))
   );
 };
 
 const isCancellation = (text: string): boolean => {
   const lower = text.toLowerCase().trim();
   const words = lower.split(/\s+/);
-  const cancelPhrases = ["gak jadi", "nggak jadi", "nanti aja", "jangan dulu", "batalin aja", "ga jadi"];
+  const cancelPhrases = [
+    "gak jadi",
+    "nggak jadi",
+    "nanti aja",
+    "jangan dulu",
+    "batalin aja",
+    "ga jadi",
+  ];
+
   return (
-    CANCEL_KEYWORDS.some((kw) => words.includes(kw)) ||
-    cancelPhrases.some((p) => lower.includes(p))
+    CANCEL_KEYWORDS.some((keyword) => words.includes(keyword)) ||
+    cancelPhrases.some((phrase) => lower.includes(phrase))
   );
 };
 
-const getActionDescription = (toolName: string, args: Record<string, unknown>): string => {
+const getActionDescription = (
+  toolName: string,
+  args: Record<string, unknown>,
+): string => {
   switch (toolName) {
     case "update_profile": {
       const updates: string[] = [];
-      if (args.name) updates.push(`nama menjadi "<b>${escapeHtml(String(args.name))}</b>"`);
-      if (args.phone) updates.push(`nomor HP menjadi "<b>${escapeHtml(String(args.phone))}</b>"`);
+      if (args.name) {
+        updates.push(`nama menjadi "<b>${escapeHtml(String(args.name))}</b>"`);
+      }
+      if (args.phone) {
+        updates.push(`nomor HP menjadi "<b>${escapeHtml(String(args.phone))}</b>"`);
+      }
       return `mengubah ${updates.join(" dan ")}`;
     }
-    case "create_rental": {
+    case "create_rental":
       return `memulai sewa kamar <b>${escapeHtml(String(args.roomId))}</b> mulai tanggal <b>${escapeHtml(String(args.startDate))}</b>`;
-    }
-    case "cancel_rental": {
+    case "cancel_rental":
       return `membatalkan sewa <b>${escapeHtml(String(args.rentalId))}</b>`;
-    }
-    case "create_payment": {
+    case "create_payment":
       return `membuat tagihan pembayaran untuk <b>${escapeHtml(String(args.monthsPaid))} bulan</b>${
-        args.rentalId ? ` pada sewa <b>${escapeHtml(String(args.rentalId))}</b>` : ""
+        args.rentalId
+          ? ` pada sewa <b>${escapeHtml(String(args.rentalId))}</b>`
+          : ""
       }`;
-    }
-    case "upload_payment_proof": {
+    case "upload_payment_proof":
       return `mengunggah bukti pembayaran untuk tagihan <b>${escapeHtml(String(args.paymentId))}</b>`;
-    }
     default:
       return `menjalankan ${toolName}`;
   }
@@ -76,7 +125,7 @@ const getLastWriteToolCall = (state: GraphStateType) => {
   if (!(lastMessage instanceof AIMessage) || !lastMessage.tool_calls?.length) {
     return null;
   }
-  return lastMessage.tool_calls.find((tc) => isWriteTool(tc.name)) ?? null;
+  return lastMessage.tool_calls.find((toolCall) => isWriteTool(toolCall.name)) ?? null;
 };
 
 const getHumanTextContent = (message: HumanMessage): string => {
@@ -89,10 +138,33 @@ const getHumanTextContent = (message: HumanMessage): string => {
   }
 
   return message.content
-    .filter((part): part is { type: string; text?: string } => typeof part === "object" && part !== null)
+    .filter(
+      (part): part is { type: string; text?: string } =>
+        typeof part === "object" && part !== null,
+    )
     .filter((part) => part.type === "text" && typeof part.text === "string")
     .map((part) => part.text)
     .join(" ");
+};
+
+const extractToolResultText = (result: unknown): string => {
+  if (typeof result === "string") {
+    return result;
+  }
+
+  if (result && typeof result === "object" && "content" in result) {
+    const content = (result as { content?: Array<{ type?: string; text?: string }> })
+      .content;
+    const textPayload = content?.find(
+      (item) => item?.type === "text" && typeof item.text === "string",
+    )?.text;
+
+    if (textPayload) {
+      return textPayload;
+    }
+  }
+
+  return JSON.stringify(result);
 };
 
 export const prepareConfirmationNode = async (
@@ -103,7 +175,7 @@ export const prepareConfirmationNode = async (
   if (!writeToolCall) {
     log.warn("No write tool call found for confirmation");
     return {
-      messages: [new AIMessage("Hmm, gak ada aksi yang perlu dikonfirmasi nih 🤔")],
+      messages: [new AIMessage("Tidak ada aksi yang perlu dikonfirmasi.")],
       pendingAction: null,
     };
   }
@@ -126,7 +198,7 @@ export const prepareConfirmationNode = async (
   return {
     messages: [
       new AIMessage(
-        `Boleh aku bantu ${pendingAction.description}? 🤔\n\nKetik "ya" kalau oke, atau "nggak" kalau mau dibatalin yaa!`,
+        `Boleh aku bantu ${pendingAction.description}?\n\nKetik "ya" kalau oke, atau "nggak" kalau mau dibatalkan.`,
       ),
     ],
     pendingAction,
@@ -136,12 +208,16 @@ export const prepareConfirmationNode = async (
 export const resolveConfirmationNode = async (
   state: GraphStateType,
 ): Promise<Partial<GraphStateType>> => {
-  const { pendingAction, messages, pendingRentalDraft, awaitingRentalStartDate } = state;
+  const {
+    pendingAction,
+    messages,
+    paymentStage,
+  } = state;
 
   if (!pendingAction) {
     log.warn("No pending action to resolve");
     return {
-      messages: [new AIMessage("Hmm, gak ada aksi yang lagi nunggu konfirmasi nih 🤔")],
+      messages: [new AIMessage("Tidak ada aksi yang sedang menunggu konfirmasi.")],
       next: "end",
       pendingAction: null,
     };
@@ -151,33 +227,41 @@ export const resolveConfirmationNode = async (
   const userText = lastMessage instanceof HumanMessage ? getHumanTextContent(lastMessage) : "";
 
   if (isCancellation(userText)) {
-    log.info({ pendingAction: pendingAction.toolName, userText }, "User cancelled action");
+    log.info(
+      { pendingAction: pendingAction.toolName, userText },
+      "User cancelled action",
+    );
+
     return {
-      messages: [new AIMessage("Okeee, batal dulu yaa 👌")],
+      messages: [new AIMessage("Oke, aksi itu dibatalkan dulu.")],
       next: "end",
       pendingAction: null,
-      pendingRentalDraft:
-        pendingAction.toolName === "create_rental"
-          ? { roomId: "", startDate: "" }
-          : pendingRentalDraft,
-      awaitingRentalStartDate:
-        pendingAction.toolName === "create_rental"
-          ? false
-          : awaitingRentalStartDate,
+      paymentStage:
+        pendingAction.toolName === "upload_payment_proof"
+          ? "awaiting_proof"
+          : pendingAction.toolName === "create_payment"
+            ? "idle"
+            : paymentStage,
     };
   }
 
   if (isConfirmation(userText)) {
-    log.info({ pendingAction: pendingAction.toolName, userText }, "User confirmed action");
+    log.info(
+      { pendingAction: pendingAction.toolName, userText },
+      "User confirmed action",
+    );
     return { next: "execute_pending" };
   }
 
-  log.info({ pendingAction: pendingAction.toolName, userText }, "User confirmation input not recognized");
+  log.info(
+    { pendingAction: pendingAction.toolName, userText },
+    "User confirmation input not recognized",
+  );
 
   return {
     messages: [
       new AIMessage(
-        `Eh, aku masih nunggu konfirmasi nih buat ${pendingAction.description}... 🤔\n\nJadi dilanjut "ya" atau "nggak" aja nih?`,
+        `Aku masih menunggu konfirmasi untuk ${pendingAction.description}.\n\nBalas "ya" untuk lanjut atau "nggak" untuk batal.`,
       ),
     ],
     next: "end",
@@ -193,14 +277,13 @@ export const executePendingActionNode = async (
     userId,
     paymentProofImageUrl,
     activePaymentId,
-    pendingRentalDraft,
-    awaitingRentalStartDate,
+    paymentStage,
   } = state;
 
   if (!pendingAction) {
     log.warn("No pending action to execute");
     return {
-      messages: [new AIMessage("Hmm, gak ada yang perlu dijalanin nih 🤔")],
+      messages: [new AIMessage("Tidak ada aksi yang perlu dijalankan.")],
       pendingAction: null,
     };
   }
@@ -209,12 +292,12 @@ export const executePendingActionNode = async (
 
   try {
     const allTools = await getAllTools();
-    const tool = allTools.find((t) => t.name === pendingAction.toolName);
+    const tool = allTools.find((item) => item.name === pendingAction.toolName);
 
     if (!tool) {
       log.error({ toolName: pendingAction.toolName }, "Tool not found");
       return {
-        messages: [new AIMessage("Yah, tool-nya gak ketemu 😅 Coba lagi ya.")],
+        messages: [new AIMessage("Tool yang diminta tidak ditemukan.")],
         pendingAction: null,
       };
     }
@@ -231,54 +314,72 @@ export const executePendingActionNode = async (
         : pendingAction.toolArgs;
 
     const result = await callSecureMcpTool(userId, pendingAction.toolName, toolArgs);
+    const resultText = extractToolResultText(result);
 
-    const resultText = typeof result === "string" ? result : JSON.stringify(result);
-    log.info({ toolName: pendingAction.toolName, result: resultText }, "Action executed successfully");
+    log.info(
+      { toolName: pendingAction.toolName, result: resultText },
+      "Action executed successfully",
+    );
 
-    let responseText = "Sip, berhasil yaa ✨";
-    
-    if (result && typeof result === 'object' && 'content' in result && Array.isArray(result.content) && result.content.length > 0) {
-      const rawText = result.content[0].text;
-      try {
-        const parsed = JSON.parse(rawText);
-        
-        if (pendingAction.toolName === "update_profile" && parsed.profile) {
-          responseText = `Sip, profil kamu udah ke-update ✨\nNama: ${parsed.profile.name}\nHP: ${parsed.profile.phone || "-"}`;
-        } else if (pendingAction.toolName === "create_rental") {
-          responseText = `<b>Sewa berhasil dibuat ✨</b>\n\nKamar <b>${parsed.room?.name}</b> di <b>${parsed.room?.kosan?.name}</b> sudah aktif untuk kamu mulai <b>${parsed.startDate?.slice?.(0, 10) ?? "-"}</b>.\n\nKalau mau lanjut bayar, bilang aja mau bayar berapa bulan ya.`;
-        } else if (pendingAction.toolName === "create_payment") {
-          const payment = parsed.payment;
-          responseText = `<b>Tagihan berhasil dibuat ✨</b>\n\nID tagihan: <code>${payment?.humanId ?? "-"}</code>\nPeriode: <b>${payment?.periodStart?.slice?.(0, 10) ?? "-"} s/d ${payment?.periodEnd?.slice?.(0, 10) ?? "-"}</b>\nTotal: <b>Rp ${(payment?.amount ?? 0).toLocaleString("id-ID")}</b>\n\nSekarang kirim bukti bayarnya ya, nanti admin verifikasi.`;
-        } else if (parsed.message) {
-          responseText = parsed.message;
-        } else {
-          responseText = "Sip, berhasil yaa ✨";
+    let responseText = "Aksi berhasil dijalankan.";
+    let nextActivePaymentId = activePaymentId;
+    let nextPaymentStage = paymentStage;
+
+    try {
+      const parsed = JSON.parse(resultText) as {
+        message?: string;
+        profile?: { name?: string; phone?: string };
+        room?: { name?: string; kosan?: { name?: string } };
+        startDate?: string;
+        payment?: {
+          humanId?: string;
+          periodStart?: string;
+          periodEnd?: string;
+          amount?: number;
+        };
+      };
+
+      if (pendingAction.toolName === "update_profile" && parsed.profile) {
+        responseText = `Profil berhasil diperbarui.\nNama: ${parsed.profile.name}\nHP: ${parsed.profile.phone || "-"}`;
+      } else if (pendingAction.toolName === "create_rental") {
+        responseText = `<b>Sewa berhasil dibuat</b>\n\nKamar <b>${parsed.room?.name}</b> di <b>${parsed.room?.kosan?.name}</b> sudah aktif untuk kamu mulai <b>${parsed.startDate?.slice?.(0, 10) ?? "-"}</b>.\n\nKalau mau lanjut bayar, bilang saja mau bayar berapa bulan.`;
+      } else if (pendingAction.toolName === "create_payment") {
+        const payment = parsed.payment;
+        if (typeof payment?.humanId === "string") {
+          nextActivePaymentId = payment.humanId;
+          nextPaymentStage = "awaiting_proof";
         }
-      } catch {
-        responseText = rawText || "Sip, berhasil yaa ✨";
+        responseText = `<b>Tagihan berhasil dibuat</b>\n\nID tagihan: <code>${payment?.humanId ?? "-"}</code>\nPeriode: <b>${payment?.periodStart?.slice?.(0, 10) ?? "-"} s/d ${payment?.periodEnd?.slice?.(0, 10) ?? "-"}</b>\nTotal: <b>Rp ${(payment?.amount ?? 0).toLocaleString("id-ID")}</b>\n\nSekarang kirim bukti bayarnya ya, nanti admin verifikasi.`;
+      } else if (pendingAction.toolName === "upload_payment_proof") {
+        nextActivePaymentId = "";
+        nextPaymentStage = "idle";
+        responseText =
+          typeof parsed.message === "string"
+            ? parsed.message
+            : "Bukti bayar berhasil diunggah. Admin akan verifikasi ya.";
+      } else if (parsed.message) {
+        responseText = parsed.message;
+      } else {
+        responseText = resultText || responseText;
       }
-    } else {
-      responseText = "Oke, aksinya udah berhasil dijalanin ✨";
+    } catch {
+      responseText = resultText || responseText;
+      if (pendingAction.toolName === "upload_payment_proof") {
+        nextActivePaymentId = "";
+        nextPaymentStage = "idle";
+      }
     }
 
     return {
       messages: [new AIMessage(responseText)],
       pendingAction: null,
-      activePaymentId:
-        pendingAction.toolName === "upload_payment_proof" ? "" : activePaymentId,
-      pendingRentalDraft:
-        pendingAction.toolName === "create_rental"
-          ? { roomId: "", startDate: "" }
-          : pendingRentalDraft,
-      awaitingRentalStartDate:
-        pendingAction.toolName === "create_rental"
-          ? false
-          : awaitingRentalStartDate,
+      activePaymentId: nextActivePaymentId,
+      paymentStage: nextPaymentStage,
     };
   } catch (error) {
     log.error({ error, pendingAction }, "Failed to execute action");
     return {
-      messages: [new AIMessage("Aduh, tadi ada error pas jalanin aksinya 😅 Coba ulang lagi ya.")],
+      messages: [new AIMessage("Ada error saat menjalankan aksi. Coba ulang lagi.")],
       pendingAction: null,
     };
   }
