@@ -14,6 +14,10 @@ import {
 import { paymentsNode } from "./nodes/payments.js";
 import { mediaExtractorNode } from "./nodes/media.js";
 import { visionProcessorNode } from "./nodes/vision.js";
+import {
+  clarifyNode,
+  resolveClarificationNode,
+} from "./nodes/clarify.js";
 import { getAllTools, hasAnyToolCall, hasWriteToolCall } from "./tools.js";
 import { createLogger } from "../lib/logger.js";
 import { ToolMessage } from "@langchain/core/messages";
@@ -217,6 +221,15 @@ const routeAfterResolveConfirmation = (state: GraphStateType) => {
   return END;
 };
 
+const routeAfterResolveClarification = (state: GraphStateType) => {
+  if (state.next === "clarify") return "clarify";
+  if (state.next === "general") return "general";
+  if (state.next === "profile") return "profile";
+  if (state.next === "rooms") return "rooms";
+  if (state.next === "payments") return "payments";
+  return END;
+};
+
 const buildGraph = async () => {
   // Custom Secure Tool Node (Middleware)
   const secureToolNode = async (state: GraphStateType) => {
@@ -313,6 +326,8 @@ const buildGraph = async () => {
     .addNode("execute_pending", executePendingActionNode)
     .addNode("media_extractor", mediaExtractorNode)
     .addNode("vision", visionProcessorNode)
+    .addNode("clarify", clarifyNode)
+    .addNode("resolve_clarification", resolveClarificationNode)
 
     .addEdge(START, "memory")
     .addEdge("memory", "vision")
@@ -323,6 +338,8 @@ const buildGraph = async () => {
       profile: "profile",
       rooms: "rooms",
       payments: "payments",
+      clarify: "clarify",
+      resolve_clarification: "resolve_clarification",
       resolve_confirmation: "resolve_confirmation",
     })
 
@@ -354,6 +371,19 @@ const buildGraph = async () => {
       execute_pending: "execute_pending",
       [END]: END,
     })
+    .addEdge("clarify", END)
+    .addConditionalEdges(
+      "resolve_clarification",
+      routeAfterResolveClarification,
+      {
+        clarify: "clarify",
+        general: "general",
+        profile: "profile",
+        rooms: "rooms",
+        payments: "payments",
+        [END]: END,
+      },
+    )
     .addEdge("execute_pending", END)
 
     .addEdge("tools", "media_extractor")

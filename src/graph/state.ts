@@ -23,6 +23,7 @@ export interface PendingPaymentSnapshot {
 }
 
 export type PaymentStage = "idle" | "choosing_payment" | "awaiting_proof";
+export type ClarificationRoute = "general" | "profile" | "rooms" | "payments";
 
 // Pending action for confirmation
 export interface PendingAction {
@@ -45,6 +46,16 @@ export interface PendingMemoryCandidate {
   lastSeenAt: string; // ISO timestamp
   seenCount: number; // How many times extracted
   checkpointCount: number; // How many checkpoints survived
+}
+
+export interface PendingClarification {
+  question: string;
+  reason: string;
+  candidateRoutes: ClarificationRoute[];
+  suggestedRoute: ClarificationRoute;
+  originalUserText: string;
+  visionAnalysis?: string;
+  attempts: number;
 }
 
 export const GraphState = Annotation.Root({
@@ -128,6 +139,12 @@ export const GraphState = Annotation.Root({
 
   // Pending action awaiting confirmation
   pendingAction: Annotation<PendingAction | null>({
+    reducer: (_, update) => update,
+    default: () => null,
+  }),
+
+  // Pending clarification awaiting follow-up from the user
+  pendingClarification: Annotation<PendingClarification | null>({
     reducer: (_, update) => update,
     default: () => null,
   }),
