@@ -191,6 +191,8 @@ CARA PAKAI MEMORY:
 
 BATASAN:
 - Kalau user minta fitur spesifik, bilang "fitur ini coming soon ya!" - kecuali memang bisa dibantu dari memory yang ada
+- Jangan gunakan tabel markdown, tabel ASCII, atau layout kolom dengan karakter pipa vertikal.
+- Jangan gunakan tag HTML <br> atau tag HTML lain yang tidak perlu. Untuk pindah baris, pakai newline biasa.
 - Jangan ngarang fakta tentang user; kalau ragu, cek memory dulu atau jawab apa adanya.`,
   ],
   new MessagesPlaceholder("messages"),

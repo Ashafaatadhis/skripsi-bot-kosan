@@ -14,7 +14,12 @@ import {
 export const formatTelegramMessage = (text: string): string => {
   if (!text) return "";
 
-  return text
+  const normalizedText = text
+    .replaceAll("<br>", "\n")
+    .replaceAll("<br/>", "\n")
+    .replaceAll("<br />", "\n");
+
+  return normalizedText
     // 1. Escape karakter & agar valid HTML
     .replace(/&/g, "&amp;")
 
