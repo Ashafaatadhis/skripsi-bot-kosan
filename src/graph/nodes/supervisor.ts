@@ -1,6 +1,6 @@
 import { BaseMessage, getBufferString } from "@langchain/core/messages";
 import { GraphStateType, VisionResult } from "../state.js";
-import { llm } from "../../llm/index.js";
+import { supervisorLLM } from "../../llm/index.js";
 import { supervisorPrompt, AGENTS } from "../../prompts/index.js";
 import { createLogger } from "../../lib/logger.js";
 import { toTextOnlyMessages } from "../../lib/formatter.js";
@@ -152,7 +152,7 @@ export const supervisorNode = async (
     return { next: "payments" };
   }
 
-  const chain = supervisorPrompt.pipe(llm);
+  const chain = supervisorPrompt.pipe(supervisorLLM);
   const conversation = getBufferString(textMessages);
   const result = await chain.invoke({
     agents: AGENTS.join(", "),

@@ -3,6 +3,33 @@ import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts
 export const AGENTS = ["general", "profile", "rooms", "payments"] as const;
 export type AgentName = (typeof AGENTS)[number];
 
+export const visionSystemPrompt = `Kamu adalah ahli OCR dan analisis gambar untuk bot kosan.
+Balas HANYA JSON valid dengan format:
+{
+  "kind": "payment_proof" | "non_payment" | "unknown",
+  "confidence": 0.0-1.0,
+  "summary": "deskripsi utama gambar dalam bahasa Indonesia",
+  "amount": number | null,
+  "bank": string | null,
+  "transferDate": "YYYY-MM-DD" | null,
+  "recipient": string | null
+}
+
+Aturan:
+- kind=payment_proof jika gambar terlihat seperti struk, bukti transfer, atau screenshot transaksi bank/e-wallet.
+- kind=non_payment jika jelas bukan bukti pembayaran.
+- kind=unknown jika tidak cukup yakin.
+- summary WAJIB spesifik dan informatif. Jangan terlalu singkat, jangan cuma 2-4 kata.
+- Untuk gambar yang jelas, summary idealnya 1-3 kalimat pendek atau 2-3 klausa informatif dalam 1 kalimat panjang.
+- Jelaskan subjek utama, konteks tampilan, teks penting yang terbaca, serta angka/informasi menonjol yang benar-benar terlihat jika ada.
+- Jika gambar berupa screenshot aplikasi/website, sebut jenis halaman atau isi layarnya dengan konkret.
+- Jika kind=payment_proof, summary tetap ringkas tapi harus menyebut detail penting yang terlihat seperti nominal, bank, tanggal, atau penerima jika terbaca.
+- Jika kind=non_payment, JANGAN tulis kalimat generik seperti "Gambar bukan bukti pembayaran".
+  Sebaliknya, jelaskan isi visual utama secara konkret, misalnya papan skor, daftar harga, halaman aplikasi, objek, tempat, atau aktivitas yang terlihat.
+- Jika user menyertakan teks/caption pada pesan yang sama, gunakan itu hanya sebagai konteks tambahan. Tetap utamakan apa yang benar-benar terlihat di gambar.
+- Jika ada teks atau angka yang blur/tidak terbaca penuh, katakan seperlunya bahwa detail tertentu tidak jelas. Jangan mengarang.
+- Jika gambar tidak jelas, jelaskan keterbatasannya secara singkat di summary, jangan mengarang detail.`;
+
 // ===================
 // SUPERVISOR
 // ===================

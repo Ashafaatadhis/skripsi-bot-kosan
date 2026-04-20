@@ -2,6 +2,7 @@ import { SystemMessage } from "@langchain/core/messages";
 import { GraphStateType, VisionResult } from "../state.js";
 import { visionLLM } from "../../llm/index.js";
 import { createLogger } from "../../lib/logger.js";
+import { visionSystemPrompt } from "../../prompts/index.js";
 
 const log = createLogger("node-vision");
 
@@ -88,30 +89,7 @@ export const visionProcessorNode = async (
 
   try {
     const visionResponse = await visionLLM.invoke([
-      new SystemMessage(
-        `Kamu adalah ahli OCR dan klasifikasi gambar untuk bot pembayaran kos.
-Balas HANYA JSON valid dengan format:
-{
-  "kind": "payment_proof" | "non_payment" | "unknown",
-  "confidence": 0.0-1.0,
-  "summary": "ringkasan singkat dalam bahasa Indonesia",
-  "amount": number | null,
-  "bank": string | null,
-  "transferDate": "YYYY-MM-DD" | null,
-  "recipient": string | null
-}
-
-Aturan:
-- kind=payment_proof jika gambar terlihat seperti struk, bukti transfer, atau screenshot transaksi bank/e-wallet.
-- kind=non_payment jika jelas bukan bukti pembayaran.
-- kind=unknown jika tidak cukup yakin.
-- summary harus singkat, spesifik, dan fokus pada isi visual utama yang benar-benar terlihat.
-- Jika kind=payment_proof, summary ringkas isi bukti pembayaran yang penting.
-- Jika kind=non_payment, JANGAN tulis kalimat generik seperti "Gambar bukan bukti pembayaran".
-  Sebaliknya, jelaskan subjek utama gambar secara konkret, misalnya orang/hewan/objek/tempat/aktivitas yang terlihat.
-- Jika user menyertakan teks/caption pada pesan yang sama, gunakan itu hanya sebagai konteks tambahan. Tetap utamakan apa yang benar-benar terlihat di gambar.
-- Jika gambar tidak jelas, jelaskan keterbatasannya secara singkat di summary, jangan mengarang detail.`,
-      ),
+      new SystemMessage(visionSystemPrompt),
       lastMessage,
     ]);
 
