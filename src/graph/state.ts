@@ -1,4 +1,4 @@
-import { Annotation } from "@langchain/langgraph";
+import { Annotation, messagesStateReducer } from "@langchain/langgraph";
 import { BaseMessage } from "@langchain/core/messages";
 import { FactCategory } from "../config/memory.js";
 
@@ -61,7 +61,7 @@ export interface PendingClarification {
 export const GraphState = Annotation.Root({
   // Conversation
   messages: Annotation<BaseMessage[]>({
-    reducer: (curr, update) => [...curr, ...update],
+    reducer: messagesStateReducer,
     default: () => [],
   }),
 

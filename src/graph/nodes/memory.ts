@@ -1,4 +1,9 @@
-import { BaseMessage, getBufferString } from "@langchain/core/messages";
+import {
+  BaseMessage,
+  RemoveMessage,
+  getBufferString,
+} from "@langchain/core/messages";
+import { REMOVE_ALL_MESSAGES } from "@langchain/langgraph";
 import { GraphStateType, PendingMemoryCandidate } from "../state.js";
 import { llm } from "../../llm/index.js";
 import {
@@ -267,7 +272,8 @@ export const memoryNode = async (
     state;
 
   let newSummary = summary;
-  let newMessages = messages;
+  let messagesUpdate: BaseMessage[] | undefined;
+  let recentMessages = messages;
   let newTokenCounter = tokensSinceLastCheckpoint;
   let newPendingCandidates = pendingMemoryCandidates;
 
@@ -280,7 +286,11 @@ export const memoryNode = async (
       summary,
     );
     newSummary = summarized;
-    newMessages = messages.slice(-RAW_TAIL_COUNT);
+    recentMessages = messages.slice(-RAW_TAIL_COUNT);
+    messagesUpdate = [
+      new RemoveMessage({ id: REMOVE_ALL_MESSAGES }),
+      ...recentMessages,
+    ];
     newTokenCounter += droppedTokens;
 
     log.info(
@@ -294,7 +304,7 @@ export const memoryNode = async (
     log.info({ tokens: newTokenCounter }, "Running long-term checkpoint");
 
     // Extract memories
-    const extraction = await extractMemories(newSummary, newMessages);
+    const extraction = await extractMemories(newSummary, recentMessages);
     log.info(
       { facts: extraction.facts.length, hasEpisode: !!extraction.episodeSummary },
       "Memories extracted",
@@ -323,7 +333,7 @@ export const memoryNode = async (
   }
 
   return {
-    messages: newMessages,
+    ...(messagesUpdate ? { messages: messagesUpdate } : {}),
     summary: newSummary,
     tokensSinceLastCheckpoint: newTokenCounter,
     pendingMemoryCandidates: newPendingCandidates,
