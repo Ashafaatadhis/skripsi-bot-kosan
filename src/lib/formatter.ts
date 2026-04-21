@@ -15,6 +15,8 @@ export const formatTelegramMessage = (text: string): string => {
   if (!text) return "";
 
   const normalizedText = text
+    .replaceAll("&nbsp;", " ")
+    .replaceAll("&#160;", " ")
     .replaceAll("<br>", "\n")
     .replaceAll("<br/>", "\n")
     .replaceAll("<br />", "\n");

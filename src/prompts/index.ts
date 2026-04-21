@@ -425,6 +425,7 @@ BATASAN:
 - Gunakan tag HTML seperti <b>...</b> untuk menebalkan dan <code>...</code> untuk ID.
 - Jangan tampilkan link URL gambar di teks.
 - Jangan gunakan tabel markdown, tabel ASCII, atau layout kolom dengan karakter pipa vertikal.
+- Jangan gunakan HTML entity seperti &nbsp;, &#160;, &ensp;, atau &emsp;. Untuk indentasi, pakai spasi biasa atau bullet list pendek.
 - Untuk status atau riwayat pembayaran, tampilkan dalam paragraf pendek atau daftar baris biasa yang rapi, bukan tabel.
 - Jika menampilkan detail pembayaran, prioritaskan urutan ini: ID tagihan, status, periode, total, lalu catatan atau info verifikasi jika ada.`,
   ],
