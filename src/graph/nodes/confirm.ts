@@ -104,11 +104,11 @@ const getActionDescription = (
       return `mengubah ${updates.join(" dan ")}`;
     }
     case "create_rental":
-      return `memulai sewa kamar <b>${escapeHtml(String(args.roomId))}</b> mulai tanggal <b>${escapeHtml(String(args.startDate))}</b>`;
+      return `memulai sewa kamar <code>${escapeHtml(String(args.roomId))}</code> mulai tanggal <b>${escapeHtml(String(args.startDate))}</b>`;
     case "cancel_rental":
-      return `membatalkan sewa <b>${escapeHtml(String(args.rentalId))}</b>`;
+      return `membatalkan sewa <code>${escapeHtml(String(args.rentalId))}</code>`;
     case "end_rental":
-      return `mengakhiri sewa <b>${escapeHtml(String(args.rentalId))}</b>${
+      return `mengakhiri sewa <code>${escapeHtml(String(args.rentalId))}</code>${
         args.checkoutDate
           ? ` pada tanggal <b>${escapeHtml(String(args.checkoutDate))}</b>`
           : ""
@@ -116,11 +116,11 @@ const getActionDescription = (
     case "create_payment":
       return `membuat tagihan pembayaran untuk <b>${escapeHtml(String(args.monthsPaid))} bulan</b>${
         args.rentalId
-          ? ` pada sewa <b>${escapeHtml(String(args.rentalId))}</b>`
+          ? ` pada sewa <code>${escapeHtml(String(args.rentalId))}</code>`
           : ""
       }`;
     case "upload_payment_proof":
-      return `mengunggah bukti pembayaran untuk tagihan <b>${escapeHtml(String(args.paymentId))}</b>`;
+      return `mengunggah bukti pembayaran untuk tagihan <code>${escapeHtml(String(args.paymentId))}</code>`;
     default:
       return `menjalankan ${toolName}`;
   }
