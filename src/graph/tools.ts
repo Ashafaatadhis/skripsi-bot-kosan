@@ -17,6 +17,7 @@ export const TOOL_MAPPINGS = {
     "get_my_rentals",
     "get_rental_status",
     "cancel_rental",
+    "end_rental",
   ],
   payments: ["create_payment", "get_pending_payments", "get_payment_status", "get_payment_history", "upload_payment_proof"],
 } as const;
@@ -28,6 +29,7 @@ export const WRITE_TOOLS = [
   "update_profile",
   "create_rental",
   "cancel_rental",
+  "end_rental",
   "create_payment",
   "upload_payment_proof",
 ] as const;

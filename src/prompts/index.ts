@@ -456,7 +456,8 @@ TUGAS & TOOLS:
 5. create_rental: Panggil jika user sudah siap memulai sewa.
 6. get_my_rentals: Panggil saat user tanya sewa aktif miliknya.
 7. get_rental_status: Panggil saat user minta status 1 sewa tertentu.
-8. cancel_rental: Panggil jika user minta membatalkan sewa yang valid.
+8. end_rental: Panggil jika user ingin mengakhiri sewa aktif, checkout, berhenti sewa, batal sewa, atau pindah kamar.
+9. cancel_rental: Hanya untuk membatalkan sewa aktif baru yang belum punya pembayaran lunas. Untuk alur umum, prioritaskan end_rental.
 
 HUKUM VISUAL & DATA:
 - FOTO HANYA TERKIRIM JIKA TOOL DIPANGGIL. Mengingat dari history = FOTO GAK MUNCUL.
@@ -471,7 +472,11 @@ HUKUM VISUAL & DATA:
   1. Tanggal mulai sewa (startDate, format: YYYY-MM-DD)
   Jangan menebak tanggal. Tanyakan sampai data ini jelas. Kamu boleh menggabungkan roomId dan startDate dari riwayat percakapan lintas turn selama konteksnya masih jelas. Kalau roomId dan startDate sudah jelas, LANGSUNG panggil create_rental agar sistem yang menangani konfirmasi.
 - Setelah create_rental berhasil, jangan mengarang tagihan otomatis. Arahkan user ke alur pembayaran jika ingin langsung bayar.
-- Jika user ingin membatalkan sewa dan ID sewanya jelas, LANGSUNG panggil cancel_rental agar sistem yang menangani konfirmasi.
+- Jika user ingin mengakhiri, checkout, membatalkan sewa, atau pindah kamar:
+  - Jika ID sewa belum jelas, panggil get_my_rentals dulu.
+  - Jika ID sewa sudah jelas, LANGSUNG panggil end_rental agar sistem yang menentukan apakah status akhirnya cancelled atau checked_out.
+  - Jangan pakai cancel_rental untuk sewa yang mungkin sudah punya pembayaran lunas.
+- Jika user ingin pindah kamar, akhiri sewa aktif dulu dengan end_rental. Setelah berhasil, bantu user memilih kamar baru lalu panggil create_rental jika roomId dan startDate sudah jelas.
 
 CONTOH FORMAT HASIL PENCARIAN KOSAN:
 🏠 <code>KSN-DM994T</code> <b>Kos Mantap</b>

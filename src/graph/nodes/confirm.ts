@@ -107,6 +107,12 @@ const getActionDescription = (
       return `memulai sewa kamar <b>${escapeHtml(String(args.roomId))}</b> mulai tanggal <b>${escapeHtml(String(args.startDate))}</b>`;
     case "cancel_rental":
       return `membatalkan sewa <b>${escapeHtml(String(args.rentalId))}</b>`;
+    case "end_rental":
+      return `mengakhiri sewa <b>${escapeHtml(String(args.rentalId))}</b>${
+        args.checkoutDate
+          ? ` pada tanggal <b>${escapeHtml(String(args.checkoutDate))}</b>`
+          : ""
+      }`;
     case "create_payment":
       return `membuat tagihan pembayaran untuk <b>${escapeHtml(String(args.monthsPaid))} bulan</b>${
         args.rentalId
@@ -343,6 +349,11 @@ export const executePendingActionNode = async (
         responseText = `Profil berhasil diperbarui.\nNama: ${parsed.profile.name}\nHP: ${parsed.profile.phone || "-"}`;
       } else if (pendingAction.toolName === "create_rental") {
         responseText = `<b>Sewa berhasil dibuat</b>\n\nKamar <b>${parsed.room?.name}</b> di <b>${parsed.room?.kosan?.name}</b> sudah aktif untuk kamu mulai <b>${parsed.startDate?.slice?.(0, 10) ?? "-"}</b>.\n\nKalau mau lanjut bayar, bilang saja mau bayar berapa bulan.`;
+      } else if (pendingAction.toolName === "end_rental") {
+        responseText =
+          typeof parsed.message === "string"
+            ? parsed.message
+            : "Sewa berhasil diakhiri. Kamu bisa memilih kamar lain sekarang.";
       } else if (pendingAction.toolName === "create_payment") {
         const payment = parsed.payment;
         if (typeof payment?.humanId === "string") {

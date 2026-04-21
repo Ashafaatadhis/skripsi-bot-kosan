@@ -209,6 +209,7 @@ const routeAfterTools = (state: GraphStateType) => {
       "get_my_rentals",
       "get_rental_status",
       "cancel_rental",
+      "end_rental",
     ].includes(toolCall.name)) return "rooms";
     if (["create_payment", "get_pending_payments", "get_payment_status", "get_payment_history", "upload_payment_proof"].includes(toolCall.name)) return "payments";
   }
