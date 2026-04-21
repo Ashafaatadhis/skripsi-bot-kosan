@@ -8,11 +8,85 @@ import { createLogger } from "../lib/logger.js";
 import { formatTelegramMessage } from "../lib/formatter.js";
 import path from "node:path";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const log = createLogger("telegram");
 
+type TelegramMediaSource = string | { source: string };
+
+const botProjectRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+);
+
+const defaultWebPublicDir = path.resolve(
+  botProjectRoot,
+  "..",
+  "skripsi-web",
+  "public",
+);
+
+const getPrimaryWebPublicDir = () =>
+  process.env.WEB_PUBLIC_DIR || defaultWebPublicDir;
+
+const getWebPublicDirCandidates = () =>
+  Array.from(
+    new Set([
+      getPrimaryWebPublicDir(),
+      defaultWebPublicDir,
+      path.resolve(process.cwd(), "..", "skripsi-web", "public"),
+      path.resolve(process.cwd(), "skripsi-web", "public"),
+    ]),
+  );
+
+const isAbsoluteHttpUrl = (url: string): boolean =>
+  url.startsWith("http://") || url.startsWith("https://");
+
+const getUploadRelativePath = (url: string): string | null => {
+  const normalizedUrl = url.startsWith("/") ? url : `/${url}`;
+  if (!normalizedUrl.startsWith("/uploads/")) {
+    return null;
+  }
+
+  return normalizedUrl.slice(1);
+};
+
+const getMediaSource = (url: string): TelegramMediaSource | null => {
+  const trimmedUrl = url.trim();
+  if (!trimmedUrl) {
+    return null;
+  }
+
+  const uploadRelativePath = getUploadRelativePath(trimmedUrl);
+  if (uploadRelativePath) {
+    for (const publicDir of getWebPublicDirCandidates()) {
+      const localPath = path.join(publicDir, uploadRelativePath);
+      if (fs.existsSync(localPath)) {
+        return { source: localPath };
+      }
+    }
+
+    log.warn(
+      {
+        url: trimmedUrl,
+        triedPublicDirs: getWebPublicDirCandidates(),
+      },
+      "Local upload image not found",
+    );
+    return null;
+  }
+
+  if (isAbsoluteHttpUrl(trimmedUrl)) {
+    return trimmedUrl;
+  }
+
+  log.warn({ url: trimmedUrl }, "Skipping non-absolute media URL");
+  return null;
+};
+
 const saveTelegramPhotoTemp = async (buffer: Buffer, extension = ".jpg") => {
-  const targetDir = path.join(process.cwd(), "..", "skripsi-web", "public", "uploads", "temp");
+  const targetDir = path.join(getPrimaryWebPublicDir(), "uploads", "temp");
   await mkdir(targetDir, { recursive: true });
 
   const fileName = `${Date.now()}-${randomUUID()}${extension}`;
@@ -68,27 +142,21 @@ export const createBot = () => {
       const user = await registerUser(telegramId, displayName);
       const graphRes = await runChat(user.id, chatId, text);
       const formattedText = formatTelegramMessage(graphRes.text);
-
-      const getMediaSource = (url: string) => {
-        if (url.startsWith("/uploads/")) {
-          const localPath = path.join(process.cwd(), "..", "skripsi-web", "public", url);
-          if (fs.existsSync(localPath)) {
-            return { source: localPath };
-          }
-        }
-        return url;
-      };
+      const mediaSources = graphRes.imageUrls
+        .slice(0, 10)
+        .map((url) => getMediaSource(url))
+        .filter((source): source is TelegramMediaSource => source !== null);
 
       try {
-        if (graphRes.imageUrls.length === 1) {
-          await ctx.sendPhoto(getMediaSource(graphRes.imageUrls[0]), {
+        if (mediaSources.length === 1) {
+          await ctx.sendPhoto(mediaSources[0], {
             caption: formattedText,
             parse_mode: "HTML",
           });
-        } else if (graphRes.imageUrls.length > 1) {
-          const media = graphRes.imageUrls.slice(0, 10).map((url, index) => ({
+        } else if (mediaSources.length > 1) {
+          const media = mediaSources.map((source, index) => ({
             type: "photo" as const,
-            media: getMediaSource(url),
+            media: source,
             caption: index === 0 ? formattedText : undefined,
             parse_mode: "HTML" as const,
           }));
@@ -100,7 +168,14 @@ export const createBot = () => {
         log.error({ err: err.message }, "Telegram media sending failed");
         await ctx.reply(formattedText, { parse_mode: "HTML" });
       }
-      log.info({ userId: user.id, imageCount: graphRes.imageUrls.length }, "Response sent");
+      log.info(
+        {
+          userId: user.id,
+          imageCount: graphRes.imageUrls.length,
+          sentImageCount: mediaSources.length,
+        },
+        "Response sent",
+      );
     } catch (error) {
       log.error({ error }, "Failed to handle message");
       await ctx.reply("Maaf, terjadi kesalahan. Silakan coba lagi.");
