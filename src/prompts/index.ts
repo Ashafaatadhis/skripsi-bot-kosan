@@ -318,6 +318,62 @@ ATURAN PEMANGGILAN TOOL:
 // ===================
 // PAYMENTS AGENT
 // ===================
+export const paymentSelectionResolverPrompt = ChatPromptTemplate.fromMessages([
+  [
+    "system",
+    `Kamu resolver pemilihan tagihan untuk bot kosan.
+
+Tugasmu hanya menentukan apakah balasan user memilih salah satu tagihan pending.
+Gunakan HANYA daftar pendingPayments yang diberikan. Jangan membuat ID sendiri.
+
+Balas HANYA JSON valid tanpa markdown, tanpa penjelasan tambahan.
+Format wajib:
+{{"action":"selected","paymentId":"PYM-EXAMPLE","reason":"alasan singkat"}}
+
+Aturan:
+- Nilai action harus salah satu dari: selected, ambiguous, none, cancelled.
+- action="selected" hanya jika user jelas memilih satu tagihan dari daftar.
+- User boleh memilih dengan ID, urutan, periode, nominal, atau deskripsi yang cocok dengan satu tagihan.
+- action="ambiguous" jika user terlihat ingin memilih tapi targetnya belum jelas.
+- action="cancelled" jika user jelas membatalkan, menolak, atau ingin keluar dari alur pembayaran.
+- action="none" jika user tidak sedang memilih tagihan dan tidak sedang membatalkan.
+- paymentId harus null kecuali action="selected".`,
+  ],
+  [
+    "human",
+    `Balasan user:
+{userReply}
+
+pendingPayments:
+{pendingPayments}`,
+  ],
+]);
+
+export const paymentFlowIntentResolverPrompt = ChatPromptTemplate.fromMessages([
+  [
+    "system",
+    `Kamu resolver intent untuk alur pembayaran bot kosan.
+
+Tugasmu hanya menentukan apakah user ingin membatalkan alur pembayaran yang sedang berjalan.
+
+Balas HANYA JSON valid tanpa markdown, tanpa penjelasan tambahan.
+Format wajib:
+{{"action":"continue","reason":"alasan singkat"}}
+
+Aturan:
+- Nilai action harus salah satu dari: cancelled, continue.
+- action="cancelled" jika user jelas ingin membatalkan, berhenti, keluar, tidak jadi, atau menolak melanjutkan alur pembayaran saat ini.
+- action="continue" jika user masih bertanya, memberi info, minta tunggu, mau lanjut nanti, atau maksud batalnya belum jelas.
+- Jangan mengubah topik sendiri. Kamu hanya klasifikasi intent.`,
+  ],
+  [
+    "human",
+    `Payment stage saat ini: {paymentStage}
+Tagihan aktif: {activePaymentId}
+Balasan user: {userReply}`,
+  ],
+]);
+
 export const paymentsPrompt = ChatPromptTemplate.fromMessages([
   [
     "system",
@@ -326,6 +382,7 @@ export const paymentsPrompt = ChatPromptTemplate.fromMessages([
 Waktu: {currentDate} {currentTime} ({currentTimezone})
 
 {summary}
+{paymentStateContext}
 {visionContext}
 {proofContext}
 {targetPaymentContext}
@@ -343,6 +400,11 @@ TOOLS:
 5. upload_payment_proof - Gunakan ini untuk mendaftarkan bukti bayar (foto) ke sistem setelah user mengirimkan foto.
 
 ATURAN FLOW:
+- Selalu baca PAYMENT_STATE jika tersedia sebelum menjawab atau memanggil tool.
+- Jika PAYMENT_STATE sudah punya activePaymentId atau resolvedPaymentId, gunakan ID itu sebagai target aktif dan jangan minta user mengulang ID yang sama.
+- Jika PAYMENT_STATE menunjukkan pendingPayments tersedia, gunakan daftar itu untuk memahami pilihan user seperti "yang pertama", "tagihan itu", atau "yang bulan ini".
+- Jika PAYMENT_STATE menunjukkan hasProofImage=true dan target tagihan sudah jelas, lanjutkan proses upload bukti bayar sesuai aturan upload_payment_proof.
+- Jika PAYMENT_STATE menunjukkan paymentStage=awaiting_proof tetapi belum ada foto bukti bayar, arahkan user untuk mengirim foto bukti bayar.
 - Jika user tanya "ada tagihan?", "belum bayar apa?", "cek iuran", atau ingin membayar → WAJIB panggil get_pending_payments.
 - Jika user minta cek status pembayaran, riwayat pembayaran, konfirmasi admin, "dicek lagi", "yang terbaru", "status saya sekarang gimana", atau pertanyaan lain yang butuh data pembayaran TERBARU, WAJIB gunakan tool. Jangan jawab hanya dari memory, summary, atau konteks percakapan.
 - Untuk cek status pembayaran TERBARU:

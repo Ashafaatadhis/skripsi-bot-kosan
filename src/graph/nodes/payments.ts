@@ -6,8 +6,12 @@ import {
   PendingPaymentSnapshot,
   VisionResult,
 } from "../state.js";
-import { llm } from "../../llm/index.js";
-import { paymentsPrompt } from "../../prompts/index.js";
+import { llm, supervisorLLM } from "../../llm/index.js";
+import {
+  paymentFlowIntentResolverPrompt,
+  paymentSelectionResolverPrompt,
+  paymentsPrompt,
+} from "../../prompts/index.js";
 import { getToolsForAI } from "../tools.js";
 import { createLogger } from "../../lib/logger.js";
 import { toTextOnlyMessage, toTextOnlyMessages } from "../../lib/formatter.js";
@@ -16,8 +20,6 @@ import { getTimeContext } from "../../lib/time.js";
 const log = createLogger("node-payments");
 
 const PAYMENT_ID_REGEX = /\bPYM-[A-Z0-9]+\b/i;
-const EXIT_PAYMENT_FLOW_REGEX =
-  /\b(batal|gak jadi|nggak jadi|ga jadi|nanti dulu|skip|stop|keluar)\b/i;
 const EXIT_PAYMENT_FLOW_HINT =
   'Kalau mau keluar dari alur pembayaran, ketik "batal".';
 
@@ -71,6 +73,29 @@ const formatPaymentChoices = (payments: PendingPaymentSnapshot[]): string =>
       return `- <code>${payment.paymentId}</code>${period}`;
     })
     .join("\n");
+
+const formatPendingPaymentsContext = (
+  payments: PendingPaymentSnapshot[],
+): string => {
+  if (payments.length === 0) {
+    return "- pendingPayments: tidak ada snapshot tagihan pending di state";
+  }
+
+  const paymentLines = payments.map((payment, index) => {
+    const period =
+      payment.periodStart && payment.periodEnd
+        ? `, periode=${payment.periodStart} s/d ${payment.periodEnd}`
+        : "";
+    const amount =
+      typeof payment.amount === "number"
+        ? `, total=Rp ${payment.amount.toLocaleString("id-ID")}`
+        : "";
+    const status = payment.status ? `, status=${payment.status}` : "";
+    return `  ${index + 1}. ${payment.paymentId}${period}${amount}${status}`;
+  });
+
+  return ["- pendingPayments:", ...paymentLines].join("\n");
+};
 
 const getSinglePendingPaymentId = (
   payments: PendingPaymentSnapshot[],
@@ -133,6 +158,180 @@ const buildPaymentContext = (state: GraphStateType): PaymentContext => {
   };
 };
 
+const buildPaymentStateContext = (
+  state: GraphStateType,
+  context: PaymentContext,
+): string => {
+  const lines = [
+    "PAYMENT_STATE:",
+    `- paymentStage: ${state.paymentStage}`,
+    `- activePaymentId: ${state.activePaymentId || "-"}`,
+    `- explicitPaymentIdFromUser: ${context.explicitPaymentId || "-"}`,
+    `- resolvedPaymentId: ${context.resolvedPaymentId || "-"}`,
+    `- hasProofImage: ${context.hasProofImage ? "true" : "false"}`,
+    `- visionKind: ${context.visionKind}`,
+    `- latestUserText: ${context.latestHumanText || "-"}`,
+    formatPendingPaymentsContext(state.pendingPaymentsSnapshot),
+  ];
+
+  return lines.join("\n");
+};
+
+type PaymentSelectionResolution = {
+  action: "selected" | "ambiguous" | "none" | "cancelled";
+  paymentId: string | null;
+  reason?: string;
+};
+
+type PaymentFlowIntentResolution = {
+  action: "cancelled" | "continue";
+  reason?: string;
+};
+
+const formatPendingPaymentsForSelection = (
+  payments: PendingPaymentSnapshot[],
+): string =>
+  payments
+    .map((payment, index) => {
+      const period =
+        payment.periodStart && payment.periodEnd
+          ? `, period: ${payment.periodStart} s/d ${payment.periodEnd}`
+          : "";
+      const amount =
+        typeof payment.amount === "number"
+          ? `, amount: Rp ${payment.amount.toLocaleString("id-ID")}`
+          : "";
+      const status = payment.status ? `, status: ${payment.status}` : "";
+      return `${index + 1}. ${payment.paymentId}${period}${amount}${status}`;
+    })
+    .join("\n");
+
+const parsePaymentSelectionResolution = (
+  content: string,
+): PaymentSelectionResolution | null => {
+  try {
+    const parsed = JSON.parse(content) as {
+      action?: string;
+      paymentId?: string | null;
+      reason?: string;
+    };
+
+    if (
+      parsed.action !== "selected" &&
+      parsed.action !== "ambiguous" &&
+      parsed.action !== "none" &&
+      parsed.action !== "cancelled"
+    ) {
+      return null;
+    }
+
+    return {
+      action: parsed.action,
+      paymentId:
+        typeof parsed.paymentId === "string"
+          ? parsed.paymentId.trim().toUpperCase()
+          : null,
+      reason: parsed.reason,
+    };
+  } catch (error) {
+    log.warn(
+      { error: error instanceof Error ? error.message : String(error) },
+      "Failed to parse payment selection resolution",
+    );
+    return null;
+  }
+};
+
+const resolvePaymentSelectionWithLLM = async (
+  userReply: string,
+  payments: PendingPaymentSnapshot[],
+): Promise<PaymentSelectionResolution | null> => {
+  if (!userReply || payments.length === 0) {
+    return null;
+  }
+
+  const chain = paymentSelectionResolverPrompt.pipe(supervisorLLM);
+  const result = await chain.invoke({
+    userReply,
+    pendingPayments: formatPendingPaymentsForSelection(payments),
+  });
+
+  const rawResponse =
+    typeof result.content === "string" ? result.content.trim() : "";
+  const resolution = parsePaymentSelectionResolution(rawResponse);
+
+  if (
+    resolution?.action === "selected" &&
+    resolution.paymentId &&
+    isKnownPendingPaymentId(payments, resolution.paymentId)
+  ) {
+    log.info(
+      {
+        paymentId: resolution.paymentId,
+        reason: resolution.reason,
+      },
+      "Resolved pending payment selection with LLM",
+    );
+    return resolution;
+  }
+
+  if (resolution?.action === "cancelled") {
+    return {
+      action: "cancelled",
+      paymentId: null,
+      reason: resolution.reason,
+    };
+  }
+
+  return null;
+};
+
+const parsePaymentFlowIntentResolution = (
+  content: string,
+): PaymentFlowIntentResolution | null => {
+  try {
+    const parsed = JSON.parse(content) as {
+      action?: string;
+      reason?: string;
+    };
+
+    if (parsed.action !== "cancelled" && parsed.action !== "continue") {
+      return null;
+    }
+
+    return {
+      action: parsed.action,
+      reason: parsed.reason,
+    };
+  } catch (error) {
+    log.warn(
+      { error: error instanceof Error ? error.message : String(error) },
+      "Failed to parse payment flow intent resolution",
+    );
+    return null;
+  }
+};
+
+const resolvePaymentFlowIntentWithLLM = async (
+  state: GraphStateType,
+  context: PaymentContext,
+): Promise<PaymentFlowIntentResolution | null> => {
+  if (!context.latestHumanText) {
+    return null;
+  }
+
+  const chain = paymentFlowIntentResolverPrompt.pipe(supervisorLLM);
+  const result = await chain.invoke({
+    paymentStage: state.paymentStage,
+    activePaymentId: state.activePaymentId || "-",
+    userReply: context.latestHumanText,
+  });
+
+  const rawResponse =
+    typeof result.content === "string" ? result.content.trim() : "";
+  return parsePaymentFlowIntentResolution(rawResponse);
+};
+
 const buildChoosePaymentReply = (
   payments: PendingPaymentSnapshot[],
   intro = "Pilih dulu tagihan mana yang mau diproses ya:",
@@ -144,6 +343,11 @@ const buildChoosePaymentReply = (
 const buildAskForProofReply = (paymentId: string): AIMessage =>
   reply(
     `Siap. Tagihan <code>${paymentId}</code> sudah aku tandai. Sekarang kirim foto bukti bayar dulu, nanti aku minta konfirmasi sebelum mengunggahnya. ${EXIT_PAYMENT_FLOW_HINT}`,
+  );
+
+const buildCancelPaymentFlowReply = (): AIMessage =>
+  reply(
+    'Oke, alur pembayaran aku hentikan dulu. Kalau mau lanjut lagi nanti bilang saja.',
   );
 
 const buildUnknownPaymentReply = (
@@ -169,28 +373,31 @@ const getAwaitingProofReply = (paymentId: string): AIMessage =>
 const getStageAfterSelection = (paymentId: string): PaymentStage =>
   paymentId ? "awaiting_proof" : "choosing_payment";
 
-const handleExitPaymentFlow = (
+const handleExitPaymentFlow = async (
   state: GraphStateType,
   context: PaymentContext,
-): Partial<GraphStateType> | null => {
+): Promise<Partial<GraphStateType> | null> => {
   if (state.paymentStage === "idle") {
     return null;
   }
 
-  if (!context.latestMessageIsHuman || context.hasProofImage) {
+  if (
+    !context.latestMessageIsHuman ||
+    context.hasProofImage ||
+    context.explicitPaymentId
+  ) {
     return null;
   }
 
-  if (!EXIT_PAYMENT_FLOW_REGEX.test(context.latestHumanText)) {
+  const intent = await resolvePaymentFlowIntentWithLLM(state, context);
+  if (intent?.action !== "cancelled") {
     return null;
   }
+
+  log.info({ reason: intent.reason }, "Payment flow cancelled by user intent");
 
   return {
-    messages: [
-      reply(
-        'Oke, alur pembayaran aku hentikan dulu. Kalau mau lanjut lagi nanti bilang saja.',
-      ),
-    ],
+    messages: [buildCancelPaymentFlowReply()],
     activePaymentId: "",
     pendingPaymentsSnapshot: [],
     paymentStage: "idle",
@@ -230,10 +437,10 @@ const handleExplicitPaymentSelection = (
   };
 };
 
-const handleChoosingPaymentStage = (
+const handleChoosingPaymentStage = async (
   state: GraphStateType,
   context: PaymentContext,
-): Partial<GraphStateType> | null => {
+): Promise<Partial<GraphStateType> | null> => {
   if (state.paymentStage !== "choosing_payment" || !context.latestMessageIsHuman) {
     return null;
   }
@@ -243,6 +450,29 @@ const handleChoosingPaymentStage = (
       return {
         messages: [buildToolCallMessage("get_pending_payments", {})],
         paymentStage: "choosing_payment",
+      };
+    }
+
+    const selection = await resolvePaymentSelectionWithLLM(
+      context.latestHumanText,
+      state.pendingPaymentsSnapshot,
+    );
+
+    if (selection?.action === "cancelled") {
+      log.info({ reason: selection.reason }, "Payment selection cancelled by user");
+      return {
+        messages: [buildCancelPaymentFlowReply()],
+        activePaymentId: "",
+        pendingPaymentsSnapshot: [],
+        paymentStage: "idle",
+      };
+    }
+
+    if (selection?.action === "selected" && selection.paymentId) {
+      return {
+        messages: [buildAskForProofReply(selection.paymentId)],
+        activePaymentId: selection.paymentId,
+        paymentStage: "awaiting_proof",
       };
     }
 
@@ -440,7 +670,7 @@ export const paymentsNode = async (
     return proofImageResult;
   }
 
-  const exitPaymentFlowResult = handleExitPaymentFlow(state, paymentContext);
+  const exitPaymentFlowResult = await handleExitPaymentFlow(state, paymentContext);
   if (exitPaymentFlowResult) {
     return exitPaymentFlowResult;
   }
@@ -450,7 +680,10 @@ export const paymentsNode = async (
     return explicitSelectionResult;
   }
 
-  const choosingPaymentResult = handleChoosingPaymentStage(state, paymentContext);
+  const choosingPaymentResult = await handleChoosingPaymentStage(
+    state,
+    paymentContext,
+  );
   if (choosingPaymentResult) {
     return choosingPaymentResult;
   }
@@ -466,6 +699,7 @@ export const paymentsNode = async (
   const response = await chain.invoke({
     messages: textMessages,
     summary: summary ? `Konteks sebelumnya:\n${summary}` : "",
+    paymentStateContext: buildPaymentStateContext(state, paymentContext),
     visionContext: visionAnalysis
       ? `Hasil analisis gambar untuk turn ini:\n${visionAnalysis}`
       : "",
