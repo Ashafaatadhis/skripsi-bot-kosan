@@ -22,7 +22,7 @@ export interface PendingPaymentSnapshot {
   note?: string;
 }
 
-export type PaymentStage = "idle" | "choosing_payment" | "awaiting_proof";
+export type PaymentStage = "idle" | "awaiting_proof";
 export type ClarificationRoute = "general" | "profile" | "rooms" | "payments";
 
 // Pending action for confirmation
@@ -31,6 +31,7 @@ export interface PendingAction {
   toolArgs: Record<string, unknown>;
   description: string; // Human-readable description for confirmation
   paymentProofImageUrl?: string;
+  paymentProofVisionKind?: VisionResult["kind"];
 }
 
 // Pending memory candidate structure
@@ -125,7 +126,8 @@ export const GraphState = Annotation.Root({
     default: () => [],
   }),
 
-  // Current payment flow stage for deterministic follow-up handling
+  // Lightweight payment context hint for follow-up handling.
+  // Agentic payment flow uses activePaymentId and pendingPaymentsSnapshot for details.
   paymentStage: Annotation<PaymentStage>({
     reducer: (_, update) => update,
     default: () => "idle",

@@ -1,7 +1,7 @@
 import { GraphStateType } from "../state.js";
 import { SystemMessage } from "@langchain/core/messages";
 import { llm } from "../../llm/index.js";
-import { generalPrompt } from "../../prompts/index.js";
+import { buildRuntimeContext, generalPrompt } from "../../prompts/index.js";
 import { getTimeContext } from "../../lib/time.js";
 import { createLogger } from "../../lib/logger.js";
 import { toTextOnlyMessages } from "../../lib/formatter.js";
@@ -12,22 +12,35 @@ const log = createLogger("general-agent");
 export const generalNode = async (
   state: GraphStateType,
 ): Promise<Partial<GraphStateType>> => {
-  const { messages, summary, userId, visionAnalysis } = state;
+  const { messages, summary, userId, visionAnalysis, visionResult } = state;
   const time = getTimeContext();
   const textMessages = toTextOnlyMessages(messages);
 
   const tools = await getGeneralTools();
   const allowedToolNames = new Set(tools.map((tool) => String(tool.name)));
   const llmWithTools = tools.length > 0 ? llm.bindTools(tools) : llm;
+  const runtimeContext = buildRuntimeContext([
+    ["WAKTU", `${time.currentDate} ${time.currentTime} (${time.currentTimezone})`],
+    ["USER_ID", userId],
+    ["SUMMARY", summary ? `Konteks percakapan:\n${summary}` : ""],
+    [
+      "VISION_AGENT_RESULT",
+      visionAnalysis ? `Hasil analisis gambar untuk turn ini:\n${visionAnalysis}` : "",
+    ],
+    [
+      "VISION_KIND",
+      visionResult
+        ? `${visionResult.kind} (confidence: ${visionResult.confidence})`
+        : "",
+    ],
+    [
+      "MEMORY_HINT",
+      "Gunakan tool search_long_term_memory kalau perlu recall konteks lama.",
+    ],
+  ]);
 
   const prompt = await generalPrompt.invoke({
-    ...time,
-    userId,
-    summary: summary ? `Konteks percakapan:\n${summary}` : "",
-    visionContext: visionAnalysis
-      ? `Hasil analisis gambar untuk turn ini:\n${visionAnalysis}`
-      : "",
-    longTermContext: "Gunakan tool search_long_term_memory kalau perlu recall konteks lama.",
+    runtimeContext,
     messages: textMessages,
   });
 

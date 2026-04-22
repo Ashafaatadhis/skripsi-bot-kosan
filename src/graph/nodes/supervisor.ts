@@ -1,7 +1,7 @@
 import { BaseMessage, getBufferString } from "@langchain/core/messages";
 import { GraphStateType, PendingClarification, VisionResult } from "../state.js";
 import { supervisorLLM } from "../../llm/index.js";
-import { supervisorPrompt, AGENTS } from "../../prompts/index.js";
+import { buildRuntimeContext, supervisorPrompt, AGENTS } from "../../prompts/index.js";
 import { createLogger } from "../../lib/logger.js";
 import { toTextOnlyMessages } from "../../lib/formatter.js";
 
@@ -271,6 +271,8 @@ export const supervisorNode = async (
     visionAnalysis,
     visionResult,
     paymentStage,
+    activePaymentId,
+    pendingPaymentsSnapshot,
   } = state;
   const textMessages = toTextOnlyMessages(messages);
   const latestHumanText = getLatestHumanText(textMessages);
@@ -289,11 +291,6 @@ export const supervisorNode = async (
     return { next: "resolve_clarification" };
   }
 
-  if (paymentStage !== "idle") {
-    log.info({ paymentStage }, "Routing to payments because payment flow is still active");
-    return { next: "payments" };
-  }
-
   if (PAYMENT_ID_REGEX.test(latestHumanText)) {
     log.info({ latestHumanText }, "Routing to payments because latest user message contains a payment ID");
     return { next: "payments" };
@@ -302,12 +299,35 @@ export const supervisorNode = async (
   const chain = supervisorPrompt.pipe(supervisorLLM);
   const conversation = getBufferString(textMessages);
   const result = await chain.invoke({
-    agents: AGENTS.join(", "),
-    summary: summary ? `Konteks sebelumnya:\n${summary}` : "",
-    visionContext: visionAnalysis ? `Hasil analisis gambar:\n${visionAnalysis}` : "",
-    proofContext: visionResult?.kind === "payment_proof"
-      ? "Sistem mendeteksi ada foto bukti bayar pada turn ini."
-      : "",
+    runtimeContext: buildRuntimeContext([
+      ["SUMMARY", summary ? `Konteks sebelumnya:\n${summary}` : ""],
+      [
+        "VISION_AGENT_RESULT",
+        visionAnalysis ? `Hasil analisis gambar:\n${visionAnalysis}` : "",
+      ],
+      [
+        "VISION_KIND",
+        visionResult
+          ? `${visionResult.kind} (confidence: ${visionResult.confidence})`
+          : "",
+      ],
+      [
+        "PROOF_IMAGE_SIGNAL",
+        visionResult?.kind === "payment_proof"
+          ? "Sistem mendeteksi ada foto bukti bayar pada turn ini."
+          : "",
+      ],
+      [
+        "PAYMENT_FLOW_STATE",
+        paymentStage !== "idle" || activePaymentId || pendingPaymentsSnapshot.length > 0
+          ? [
+              `paymentStage: ${paymentStage}`,
+              `activePaymentId: ${activePaymentId || "-"}`,
+              `pendingPaymentsCount: ${pendingPaymentsSnapshot.length}`,
+            ].join("\n")
+          : "",
+      ],
+    ]),
     conversation,
   });
 

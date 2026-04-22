@@ -1,6 +1,6 @@
 import { GraphStateType } from "../state.js";
 import { llm } from "../../llm/index.js";
-import { roomsPrompt } from "../../prompts/index.js";
+import { buildRuntimeContext, roomsPrompt } from "../../prompts/index.js";
 import { createLogger } from "../../lib/logger.js";
 import { getTimeContext } from "../../lib/time.js";
 import { toTextOnlyMessages } from "../../lib/formatter.js";
@@ -23,11 +23,15 @@ export const roomsNode = async (
 
   const tools = await getRoomsTools();
   const chain = roomsPrompt.pipe(llm.bindTools(tools));
+  const runtimeContext = buildRuntimeContext([
+    ["WAKTU", `${time.currentDate} ${time.currentTime} (${time.currentTimezone})`],
+    ["USER_ID", userId],
+    ["SUMMARY", summary ? `Konteks ringkasan:\n${summary}` : ""],
+  ]);
 
   const response = await chain.invoke({
     messages: textMessages,
-    summary: summary ? `Konteks ringkasan:\n${summary}` : "",
-    ...time,
+    runtimeContext,
   });
 
   return {

@@ -1,7 +1,11 @@
 import { AIMessage, BaseMessage, HumanMessage } from "@langchain/core/messages";
 import { GraphStateType } from "../state.js";
 import { supervisorLLM } from "../../llm/index.js";
-import { AGENTS, clarificationResolverPrompt } from "../../prompts/index.js";
+import {
+  AGENTS,
+  buildRuntimeContext,
+  clarificationResolverPrompt,
+} from "../../prompts/index.js";
 import { createLogger } from "../../lib/logger.js";
 
 const log = createLogger("clarify");
@@ -160,16 +164,21 @@ export const resolveClarificationNode = async (
 
   const chain = clarificationResolverPrompt.pipe(supervisorLLM);
   const result = await chain.invoke({
-    summary: summary ? `Konteks sebelumnya:\n${summary}` : "",
-    visionContext: pendingClarification.visionAnalysis
-      ? `Konteks gambar dari turn ambigu:\n${pendingClarification.visionAnalysis}`
-      : "",
-    candidateRoutes: pendingClarification.candidateRoutes.join(", "),
-    suggestedRoute: pendingClarification.suggestedRoute,
-    reason: pendingClarification.reason,
-    originalUserText: pendingClarification.originalUserText,
-    question: pendingClarification.question,
-    userReply,
+    runtimeContext: buildRuntimeContext([
+      ["SUMMARY", summary ? `Konteks sebelumnya:\n${summary}` : ""],
+      [
+        "VISION_AGENT_RESULT",
+        pendingClarification.visionAnalysis
+          ? `Konteks gambar dari turn ambigu:\n${pendingClarification.visionAnalysis}`
+          : "",
+      ],
+      ["KANDIDAT_AGENT", pendingClarification.candidateRoutes.join(", ")],
+      ["AGENT_SEBELUMNYA", pendingClarification.suggestedRoute],
+      ["ALASAN_KLARIFIKASI", pendingClarification.reason],
+      ["PESAN_USER_AWAL", pendingClarification.originalUserText],
+      ["PERTANYAAN_TERKIRIM", pendingClarification.question],
+      ["JAWABAN_USER_SEKARANG", userReply],
+    ]),
   });
 
   const rawResponse = String(result.content).trim();

@@ -186,6 +186,29 @@ export const prepareConfirmationNode = async (
     };
   }
 
+  if (
+    writeToolCall.name === "upload_payment_proof" &&
+    state.visionResult?.kind !== "payment_proof"
+  ) {
+    log.warn(
+      {
+        visionKind: state.visionResult?.kind ?? "none",
+        toolArgs: writeToolCall.args,
+      },
+      "Blocked upload_payment_proof because latest image is not payment proof",
+    );
+
+    return {
+      messages: [
+        new AIMessage(
+          "Aku belum bisa mengunggah gambar itu sebagai bukti bayar karena gambarnya belum terlihat seperti struk atau bukti transfer. Kirim foto bukti pembayaran yang lebih jelas ya.",
+        ),
+      ],
+      pendingAction: null,
+      paymentStage: "awaiting_proof",
+    };
+  }
+
   const pendingAction: PendingAction = {
     toolName: writeToolCall.name,
     toolArgs: writeToolCall.args as Record<string, unknown>,
@@ -196,6 +219,10 @@ export const prepareConfirmationNode = async (
     paymentProofImageUrl:
       writeToolCall.name === "upload_payment_proof"
         ? state.paymentProofImageUrl || undefined
+        : undefined,
+    paymentProofVisionKind:
+      writeToolCall.name === "upload_payment_proof"
+        ? state.visionResult?.kind
         : undefined,
   };
 
@@ -291,6 +318,29 @@ export const executePendingActionNode = async (
     return {
       messages: [new AIMessage("Tidak ada aksi yang perlu dijalankan.")],
       pendingAction: null,
+    };
+  }
+
+  if (
+    pendingAction.toolName === "upload_payment_proof" &&
+    pendingAction.paymentProofVisionKind !== "payment_proof"
+  ) {
+    log.warn(
+      {
+        visionKind: pendingAction.paymentProofVisionKind ?? "none",
+        pendingAction,
+      },
+      "Blocked confirmed upload_payment_proof because pending proof image is not payment proof",
+    );
+
+    return {
+      messages: [
+        new AIMessage(
+          "Aku batalkan upload bukti bayar itu karena gambar terakhir belum terlihat seperti struk atau bukti transfer. Kirim foto bukti pembayaran yang lebih jelas ya.",
+        ),
+      ],
+      pendingAction: null,
+      paymentStage: "awaiting_proof",
     };
   }
 

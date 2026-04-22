@@ -1,6 +1,6 @@
 import { GraphStateType } from "../state.js";
 import { llm } from "../../llm/index.js";
-import { profilePrompt } from "../../prompts/index.js";
+import { buildRuntimeContext, profilePrompt } from "../../prompts/index.js";
 import { getTimeContext } from "../../lib/time.js";
 import { createLogger } from "../../lib/logger.js";
 import { toTextOnlyMessages } from "../../lib/formatter.js";
@@ -16,6 +16,11 @@ export const profileNode = async (
   const textMessages = toTextOnlyMessages(messages);
 
   const tools = await getProfileTools();
+  const runtimeContext = buildRuntimeContext([
+    ["WAKTU", `${time.currentDate} ${time.currentTime} (${time.currentTimezone})`],
+    ["USER_ID", userId],
+    ["SUMMARY", summary ? `Konteks percakapan:\n${summary}` : ""],
+  ]);
 
   log.info(
     { toolCount: tools.length, toolNames: tools.map((t) => t.name) },
@@ -25,9 +30,7 @@ export const profileNode = async (
   if (tools.length === 0) {
     log.warn("No profile tools available, responding without tools");
     const prompt = await profilePrompt.invoke({
-      ...time,
-      userId,
-      summary: summary ? `Konteks percakapan:\n${summary}` : "",
+      runtimeContext,
       messages: textMessages,
     });
     const response = await llm.invoke(prompt);
@@ -36,9 +39,7 @@ export const profileNode = async (
 
   const llmWithTools = llm.bindTools(tools);
   const prompt = await profilePrompt.invoke({
-    ...time,
-    userId,
-    summary: summary ? `Konteks percakapan:\n${summary}` : "",
+    runtimeContext,
     messages: textMessages,
   });
 
