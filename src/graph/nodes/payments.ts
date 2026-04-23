@@ -112,7 +112,6 @@ const buildPaymentStateContext = (
 ): string => {
   const lines = [
     "PAYMENT_STATE:",
-    `- paymentStage: ${state.paymentStage}`,
     `- activePaymentId: ${state.activePaymentId || "-"}`,
     `- explicitPaymentIdFromUser: ${context.explicitPaymentId || "-"}`,
     `- resolvedPaymentId: ${context.resolvedPaymentId || "-"}`,
@@ -184,6 +183,5 @@ export const paymentsNode = async (
   return {
     messages: [response],
     activePaymentId: paymentContext.resolvedPaymentId || state.activePaymentId,
-    paymentStage: state.paymentStage,
   };
 };

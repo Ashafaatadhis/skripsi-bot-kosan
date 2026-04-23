@@ -22,7 +22,6 @@ export interface PendingPaymentSnapshot {
   note?: string;
 }
 
-export type PaymentStage = "idle" | "awaiting_proof";
 export type ClarificationRoute = "general" | "profile" | "rooms" | "payments";
 
 // Pending action for confirmation
@@ -124,13 +123,6 @@ export const GraphState = Annotation.Root({
   pendingPaymentsSnapshot: Annotation<PendingPaymentSnapshot[]>({
     reducer: (_, update) => update,
     default: () => [],
-  }),
-
-  // Lightweight payment context hint for follow-up handling.
-  // Agentic payment flow uses activePaymentId and pendingPaymentsSnapshot for details.
-  paymentStage: Annotation<PaymentStage>({
-    reducer: (_, update) => update,
-    default: () => "idle",
   }),
 
   // Images found during tool execution (reset each turn)

@@ -205,7 +205,6 @@ export const prepareConfirmationNode = async (
         ),
       ],
       pendingAction: null,
-      paymentStage: "awaiting_proof",
     };
   }
 
@@ -244,7 +243,6 @@ export const resolveConfirmationNode = async (
   const {
     pendingAction,
     messages,
-    paymentStage,
   } = state;
 
   if (!pendingAction) {
@@ -269,12 +267,6 @@ export const resolveConfirmationNode = async (
       messages: [new AIMessage("Oke, aksi itu dibatalkan dulu.")],
       next: "end",
       pendingAction: null,
-      paymentStage:
-        pendingAction.toolName === "upload_payment_proof"
-          ? "awaiting_proof"
-          : pendingAction.toolName === "create_payment"
-            ? "idle"
-            : paymentStage,
     };
   }
 
@@ -310,7 +302,6 @@ export const executePendingActionNode = async (
     userId,
     paymentProofImageUrl,
     activePaymentId,
-    paymentStage,
   } = state;
 
   if (!pendingAction) {
@@ -340,7 +331,6 @@ export const executePendingActionNode = async (
         ),
       ],
       pendingAction: null,
-      paymentStage: "awaiting_proof",
     };
   }
 
@@ -379,7 +369,6 @@ export const executePendingActionNode = async (
 
     let responseText = "Aksi berhasil dijalankan.";
     let nextActivePaymentId = activePaymentId;
-    let nextPaymentStage = paymentStage;
 
     try {
       const parsed = JSON.parse(resultText) as {
@@ -408,12 +397,10 @@ export const executePendingActionNode = async (
         const payment = parsed.payment;
         if (typeof payment?.humanId === "string") {
           nextActivePaymentId = payment.humanId;
-          nextPaymentStage = "awaiting_proof";
         }
         responseText = `<b>Tagihan berhasil dibuat</b>\n\nID tagihan: <code>${payment?.humanId ?? "-"}</code>\nPeriode: <b>${payment?.periodStart?.slice?.(0, 10) ?? "-"} s/d ${payment?.periodEnd?.slice?.(0, 10) ?? "-"}</b>\nTotal: <b>Rp ${(payment?.amount ?? 0).toLocaleString("id-ID")}</b>\n\nSekarang kirim bukti bayarnya ya, nanti admin verifikasi.`;
       } else if (pendingAction.toolName === "upload_payment_proof") {
         nextActivePaymentId = "";
-        nextPaymentStage = "idle";
         responseText =
           typeof parsed.message === "string"
             ? parsed.message
@@ -427,7 +414,6 @@ export const executePendingActionNode = async (
       responseText = resultText || responseText;
       if (pendingAction.toolName === "upload_payment_proof") {
         nextActivePaymentId = "";
-        nextPaymentStage = "idle";
       }
     }
 
@@ -435,7 +421,6 @@ export const executePendingActionNode = async (
       messages: [new AIMessage(responseText)],
       pendingAction: null,
       activePaymentId: nextActivePaymentId,
-      paymentStage: nextPaymentStage,
     };
   } catch (error) {
     log.error({ error, pendingAction }, "Failed to execute action");

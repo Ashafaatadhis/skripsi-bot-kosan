@@ -270,7 +270,6 @@ export const supervisorNode = async (
     pendingClarification,
     visionAnalysis,
     visionResult,
-    paymentStage,
     activePaymentId,
     pendingPaymentsSnapshot,
   } = state;
@@ -319,9 +318,8 @@ export const supervisorNode = async (
       ],
       [
         "PAYMENT_FLOW_STATE",
-        paymentStage !== "idle" || activePaymentId || pendingPaymentsSnapshot.length > 0
+        activePaymentId || pendingPaymentsSnapshot.length > 0
           ? [
-              `paymentStage: ${paymentStage}`,
               `activePaymentId: ${activePaymentId || "-"}`,
               `pendingPaymentsCount: ${pendingPaymentsSnapshot.length}`,
             ].join("\n")
